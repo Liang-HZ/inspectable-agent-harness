@@ -88,6 +88,22 @@ The first agent response includes the final answer plus inspectable steps:
 }
 ```
 
+## Stream the Agent Route Directly
+
+```bash
+curl -N -X POST http://localhost:3000/api/agent/stream \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task": "请统计这段文本的字符数、行数和词数：hello world\nsecond line",
+    "goal": "请使用可用工具得到准确统计",
+    "temperature": 0
+  }'
+```
+
+The streaming route returns Server-Sent Events. `step` events show agent progress,
+`answerDelta` events stream the final answer text, and `done` carries the final
+result object.
+
 Error responses use the same discriminant:
 
 ```json
@@ -106,8 +122,10 @@ lib/env.ts                         environment variable reading
 lib/openai-compatible-client.ts    OpenAI-compatible SDK client
 lib/chat.ts                        model call service
 app/api/agent/route.ts             agent HTTP entry point
+app/api/agent/stream/route.ts      streaming agent HTTP entry point
 lib/agent-input.ts                 agent request body parsing and validation
-lib/agent.ts                       single-step agent service
+lib/agent.ts                       tool-using agent service
+lib/agent-tools.ts                 local agent tool definitions
 ```
 
 `route.ts` should stay thin: read the HTTP request, validate input, call the service, and return

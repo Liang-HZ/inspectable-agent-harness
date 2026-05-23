@@ -26,6 +26,24 @@ export const agentResultSchema = z.strictObject({
 
 export type AgentResult = z.infer<typeof agentResultSchema>;
 
+export type AgentStreamEvent =
+  | {
+      type: 'step';
+      step: AgentStep;
+    }
+  | {
+      type: 'answerDelta';
+      delta: string;
+    }
+  | {
+      type: 'done';
+      result: AgentResult;
+    }
+  | {
+      type: 'error';
+      error: string;
+    };
+
 export const agentInputValidationErrorsSchema = z.strictObject({
   formErrors: z.array(z.string()),
   fieldErrors: z.strictObject({

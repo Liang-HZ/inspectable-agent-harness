@@ -2,8 +2,8 @@
 
 import { FormEvent, ReactNode, useReducer } from 'react';
 
-import { requestAgentRun } from '../lib/agent-api-client';
-import type { AgentApiResponse } from '../lib/agent-api-types';
+import { requestAgentRunStream } from '../lib/agent-api-client';
+import type { AgentApiResponse, AgentStep } from '../lib/agent-api-types';
 import { requestChatCompletion } from '../lib/chat-api-client';
 import type { ChatApiResponse } from '../lib/chat-api-types';
 
@@ -47,8 +47,10 @@ type AgentViewState =
       response: null;
     }
   | {
-      status: 'submitting';
-      response: null;
+      status: 'streaming';
+      answer: string;
+      steps: AgentStep[];
+      model: string | null;
     }
   | {
       status: 'success';
@@ -113,6 +115,14 @@ type WorkbenchAction =
     }
   | {
       type: 'agentSubmitStarted';
+    }
+  | {
+      type: 'agentStepReceived';
+      step: AgentStep;
+    }
+  | {
+      type: 'agentAnswerDeltaReceived';
+      delta: string;
     }
   | {
       type: 'agentSubmitFinished';
@@ -298,8 +308,36 @@ function workbenchReducer(
       return {
         ...state,
         agentView: {
-          status: 'submitting',
-          response: null,
+          status: 'streaming',
+          answer: '',
+          steps: [],
+          model: null,
+        },
+      };
+
+    case 'agentStepReceived':
+      if (state.agentView.status !== 'streaming') {
+        return state;
+      }
+
+      return {
+        ...state,
+        agentView: {
+          ...state.agentView,
+          steps: [...state.agentView.steps, action.step],
+        },
+      };
+
+    case 'agentAnswerDeltaReceived':
+      if (state.agentView.status !== 'streaming') {
+        return state;
+      }
+
+      return {
+        ...state,
+        agentView: {
+          ...state.agentView,
+          answer: state.agentView.answer + action.delta,
         },
       };
 
@@ -365,7 +403,7 @@ function statusText(
 ): string {
   const currentStatus = mode === 'agent' ? agentView.status : chatView.status;
 
-  if (currentStatus === 'submitting') {
+  if (currentStatus === 'submitting' || currentStatus === 'streaming') {
     return 'Running';
   }
 
@@ -569,14 +607,10 @@ function ErrorState({ children }: { children: ReactNode }) {
   return <div className="errorState">{children}</div>;
 }
 
-function AgentTrace({
-  response,
-}: {
-  response: Extract<AgentApiResponse, { ok: true }>;
-}) {
+function AgentTrace({ steps }: { steps: AgentStep[] }) {
   return (
     <div className="traceList">
-      {response.result.steps.map((step) => (
+      {steps.map((step) => (
         <article className="traceItem" key={step.order}>
           <div className="traceIndex">{step.order}</div>
           <div className="traceContent">
@@ -599,13 +633,36 @@ function AgentResultView({ view }: { view: AgentViewState }) {
     return <EmptyState>Agent result will appear here.</EmptyState>;
   }
 
-  if (view.status === 'submitting') {
-    return <EmptyState>Running agent...</EmptyState>;
-  }
-
   if (view.status === 'error') {
     return (
       <ErrorState>{firstAgentValidationMessage(view.response)}</ErrorState>
+    );
+  }
+
+  if (view.status === 'streaming') {
+    return (
+      <div className="resultStack">
+        <section className="answerPanel">
+          <div className="sectionHeader">
+            <span>Answer</span>
+            <code>{view.model ?? 'streaming'}</code>
+          </div>
+          <pre className="answerText">
+            {view.answer === '' ? 'Waiting for answer...' : view.answer}
+          </pre>
+        </section>
+        <section className="tracePanel">
+          <div className="sectionHeader">
+            <span>Trace</span>
+            <code>{view.steps.length} steps</code>
+          </div>
+          {view.steps.length === 0 ? (
+            <EmptyState>Waiting for first step...</EmptyState>
+          ) : (
+            <AgentTrace steps={view.steps} />
+          )}
+        </section>
+      </div>
     );
   }
 
@@ -623,7 +680,7 @@ function AgentResultView({ view }: { view: AgentViewState }) {
           <span>Trace</span>
           <code>{view.response.result.steps.length} steps</code>
         </div>
-        <AgentTrace response={view.response} />
+        <AgentTrace steps={view.response.result.steps} />
       </section>
     </div>
   );
@@ -674,7 +731,7 @@ function ResultPanel({ mode, chatView, agentView }: ResultPanelProps) {
 export function ChatPlayground() {
   const [state, dispatch] = useReducer(workbenchReducer, initialState);
   const chatIsSubmitting = state.chatView.status === 'submitting';
-  const agentIsSubmitting = state.agentView.status === 'submitting';
+  const agentIsSubmitting = state.agentView.status === 'streaming';
   const chatCanSubmit =
     state.chatForm.message.trim().length > 0 && !chatIsSubmitting;
   const agentCanSubmit =
@@ -700,18 +757,57 @@ export function ChatPlayground() {
     event.preventDefault();
     dispatch({ type: 'agentSubmitStarted' });
 
-    const response = await requestAgentRun({
-      task: state.agentForm.task,
-      goal: optionalText(state.agentForm.goal),
-      context: optionalText(state.agentForm.context),
-      model: optionalText(state.agentForm.model),
-      temperature: optionalText(state.agentForm.temperature),
-    });
-
-    dispatch({
-      type: 'agentSubmitFinished',
-      response: response,
-    });
+    try {
+      await requestAgentRunStream(
+        {
+          task: state.agentForm.task,
+          goal: optionalText(state.agentForm.goal),
+          context: optionalText(state.agentForm.context),
+          model: optionalText(state.agentForm.model),
+          temperature: optionalText(state.agentForm.temperature),
+        },
+        {
+          onStep: (event) => {
+            dispatch({
+              type: 'agentStepReceived',
+              step: event.step,
+            });
+          },
+          onAnswerDelta: (event) => {
+            dispatch({
+              type: 'agentAnswerDeltaReceived',
+              delta: event.delta,
+            });
+          },
+          onDone: (event) => {
+            dispatch({
+              type: 'agentSubmitFinished',
+              response: {
+                ok: true,
+                result: event.result,
+              },
+            });
+          },
+          onError: (event) => {
+            dispatch({
+              type: 'agentSubmitFinished',
+              response: {
+                ok: false,
+                error: event.error,
+              },
+            });
+          },
+        },
+      );
+    } catch (error) {
+      dispatch({
+        type: 'agentSubmitFinished',
+        response: {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Request failed',
+        },
+      });
+    }
   }
 
   return (

@@ -17,6 +17,11 @@ type RunAgentOptions = {
   runId: string;
 };
 
+type RunAgentStreamCallbacks = {
+  onStep: (step: AgentStep) => void;
+  onAnswerDelta: (delta: string) => void;
+};
+
 const AGENT_SYSTEM_MESSAGE =
   'You are an inspectable tool-using agent. Decide whether the task needs a local tool. Use the inspect_text tool for text counts, length checks, line counts, or basic text statistics. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
 
@@ -45,7 +50,6 @@ function readAssistantAnswer(message: ChatCompletionMessage): string {
 function readFunctionToolCalls(
   message: ChatCompletionMessage,
 ): ChatCompletionMessageFunctionToolCall[] {
-  console.log(message)
   return (message.tool_calls ?? []).filter(
     (toolCall): toolCall is ChatCompletionMessageFunctionToolCall =>
       toolCall.type === 'function',
@@ -62,17 +66,19 @@ function buildAssistantToolCallMessage(
   };
 }
 
-export async function runAgent(
-  input: AgentInput,
-  config: ModelConfig,
-  options: RunAgentOptions,
-): Promise<AgentResult> {
-  const client = createOpenAICompatibleClient(config);
-  const prompt = buildAgentPrompt(input);
-  const steps: AgentStep[] = [];
+function temperatureParam(input: AgentInput) {
+  return input.temperature === undefined
+    ? {}
+    : { temperature: input.temperature };
+}
 
-  const promptStep: AgentStep = {
-    order: steps.length + 1,
+function createPromptStep(
+  input: AgentInput,
+  prompt: string,
+  order: number,
+): AgentStep {
+  return {
+    order: order,
     title: 'Build prompt',
     detail: 'The agent converted the validated request into a model prompt.',
     output: {
@@ -84,6 +90,103 @@ export async function runAgent(
       prompt: prompt,
     },
   };
+}
+
+function createToolStep(
+  functionToolCalls: ChatCompletionMessageFunctionToolCall[],
+  toolExecutions: AgentToolExecution[],
+  order: number,
+): AgentStep {
+  return {
+    order: order,
+    title: 'Run local tool',
+    detail: 'The model requested a local tool, so the agent executed it.',
+    output: {
+      modelToolRequests: functionToolCalls.map((toolCall) => ({
+        toolCallId: toolCall.id,
+        toolName: toolCall.function.name,
+        argumentsJson: toolCall.function.arguments,
+      })),
+      toolExecutions: toolExecutions,
+    },
+  };
+}
+
+function createFinalAnswerStep(
+  model: string,
+  answer: string,
+  usage: unknown,
+  order: number,
+  usedTool: boolean,
+): AgentStep {
+  return {
+    order: order,
+    title: usedTool ? 'Return final answer' : 'Answer directly',
+    detail: usedTool
+      ? 'The agent used the tool result to produce the final answer.'
+      : 'The model decided no local tool was needed.',
+    output: {
+      model: model,
+      answer: answer,
+      usage: usage,
+    },
+  };
+}
+
+async function streamFinalAnswer(
+  client: ReturnType<typeof createOpenAICompatibleClient>,
+  input: AgentInput,
+  config: ModelConfig,
+  messages: ChatCompletionMessageParam[],
+  callbacks: RunAgentStreamCallbacks,
+): Promise<{
+  model: string;
+  answer: string;
+  usage: unknown;
+}> {
+  const stream = await client.chat.completions.create({
+    model: config.model,
+    messages: messages,
+    stream: true,
+    ...temperatureParam(input),
+  });
+
+  let answer = '';
+  let model = config.model;
+
+  for await (const chunk of stream) {
+    model = chunk.model ?? model;
+
+    const delta = chunk.choices[0]?.delta.content;
+    if (delta === undefined || delta === null || delta === '') {
+      continue;
+    }
+
+    answer += delta;
+    callbacks.onAnswerDelta(delta);
+  }
+
+  if (answer.trim() === '') {
+    throw new Error('Model returned an empty agent answer.');
+  }
+
+  return {
+    model: model,
+    answer: answer,
+    usage: null,
+  };
+}
+
+export async function runAgent(
+  input: AgentInput,
+  config: ModelConfig,
+  options: RunAgentOptions,
+): Promise<AgentResult> {
+  const client = createOpenAICompatibleClient(config);
+  const prompt = buildAgentPrompt(input);
+  const steps: AgentStep[] = [];
+
+  const promptStep = createPromptStep(input, prompt, steps.length + 1);
   steps.push(promptStep);
   logAgentStep(options.runId, promptStep);
   logAgentInfo(options.runId, 'prompt_built', {
@@ -107,9 +210,7 @@ export async function runAgent(
     messages: baseMessages,
     tools: agentTools,
     tool_choice: 'auto',
-    ...(input.temperature === undefined
-      ? {}
-      : { temperature: input.temperature }),
+    ...temperatureParam(input),
   });
 
   const decisionMessage = decisionCompletion.choices[0]?.message;
@@ -152,19 +253,11 @@ export async function runAgent(
   const toolExecutions = functionToolCalls.map(
     (toolCall): AgentToolExecution => executeAgentTool(toolCall),
   );
-  const toolStep: AgentStep = {
-    order: steps.length + 1,
-    title: 'Run local tool',
-    detail: 'The model requested a local tool, so the agent executed it.',
-    output: {
-      modelToolRequests: functionToolCalls.map((toolCall) => ({
-        toolCallId: toolCall.id,
-        toolName: toolCall.function.name,
-        argumentsJson: toolCall.function.arguments,
-      })),
-      toolExecutions: toolExecutions,
-    },
-  };
+  const toolStep = createToolStep(
+    functionToolCalls,
+    toolExecutions,
+    steps.length + 1,
+  );
   steps.push(toolStep);
   logAgentStep(options.runId, toolStep);
 
@@ -183,9 +276,7 @@ export async function runAgent(
       buildAssistantToolCallMessage(decisionMessage),
       ...toolMessages,
     ],
-    ...(input.temperature === undefined
-      ? {}
-      : { temperature: input.temperature }),
+    ...temperatureParam(input),
   });
 
   const finalMessage = finalCompletion.choices[0]?.message;
@@ -194,16 +285,13 @@ export async function runAgent(
   }
 
   const finalAnswer = readAssistantAnswer(finalMessage);
-  const finalStep: AgentStep = {
-    order: steps.length + 1,
-    title: 'Return final answer',
-    detail: 'The agent used the tool result to produce the final answer.',
-    output: {
-      model: finalCompletion.model,
-      answer: finalAnswer,
-      usage: finalCompletion.usage ?? null,
-    },
-  };
+  const finalStep = createFinalAnswerStep(
+    finalCompletion.model,
+    finalAnswer,
+    finalCompletion.usage ?? null,
+    steps.length + 1,
+    true,
+  );
   steps.push(finalStep);
   logAgentStep(options.runId, finalStep);
   logAgentInfo(options.runId, 'model_answer_received', {
@@ -219,5 +307,131 @@ export async function runAgent(
     answer: finalAnswer,
     steps: steps,
     usage: finalCompletion.usage ?? null,
+  };
+}
+
+export async function runAgentStream(
+  input: AgentInput,
+  config: ModelConfig,
+  options: RunAgentOptions,
+  callbacks: RunAgentStreamCallbacks,
+): Promise<AgentResult> {
+  const client = createOpenAICompatibleClient(config);
+  const prompt = buildAgentPrompt(input);
+  const steps: AgentStep[] = [];
+
+  const promptStep = createPromptStep(input, prompt, steps.length + 1);
+  steps.push(promptStep);
+  callbacks.onStep(promptStep);
+  logAgentStep(options.runId, promptStep);
+  logAgentInfo(options.runId, 'prompt_built', {
+    prompt: prompt,
+    promptLength: prompt.length,
+  });
+
+  const baseMessages: ChatCompletionMessageParam[] = [
+    {
+      role: 'system',
+      content: AGENT_SYSTEM_MESSAGE,
+    },
+    {
+      role: 'user',
+      content: prompt,
+    },
+  ];
+
+  const decisionCompletion = await client.chat.completions.create({
+    model: config.model,
+    messages: baseMessages,
+    tools: agentTools,
+    tool_choice: 'auto',
+    ...temperatureParam(input),
+  });
+
+  const decisionMessage = decisionCompletion.choices[0]?.message;
+  if (decisionMessage === undefined) {
+    throw new Error('Model returned no agent decision.');
+  }
+
+  const functionToolCalls = readFunctionToolCalls(decisionMessage);
+  if (functionToolCalls.length === 0) {
+    const finalAnswer = await streamFinalAnswer(
+      client,
+      input,
+      config,
+      baseMessages,
+      callbacks,
+    );
+    const finalStep = createFinalAnswerStep(
+      finalAnswer.model,
+      finalAnswer.answer,
+      finalAnswer.usage,
+      steps.length + 1,
+      false,
+    );
+    steps.push(finalStep);
+    callbacks.onStep(finalStep);
+    logAgentStep(options.runId, finalStep);
+
+    return {
+      model: finalAnswer.model,
+      answer: finalAnswer.answer,
+      steps: steps,
+      usage: finalAnswer.usage,
+    };
+  }
+
+  const toolExecutions = functionToolCalls.map(
+    (toolCall): AgentToolExecution => executeAgentTool(toolCall),
+  );
+  const toolStep = createToolStep(
+    functionToolCalls,
+    toolExecutions,
+    steps.length + 1,
+  );
+  steps.push(toolStep);
+  callbacks.onStep(toolStep);
+  logAgentStep(options.runId, toolStep);
+
+  const toolMessages: ChatCompletionMessageParam[] = toolExecutions.map(
+    (execution) => ({
+      role: 'tool',
+      tool_call_id: execution.toolCallId,
+      content: JSON.stringify(execution.result),
+    }),
+  );
+  const finalAnswer = await streamFinalAnswer(
+    client,
+    input,
+    config,
+    [
+      ...baseMessages,
+      buildAssistantToolCallMessage(decisionMessage),
+      ...toolMessages,
+    ],
+    callbacks,
+  );
+  const finalStep = createFinalAnswerStep(
+    finalAnswer.model,
+    finalAnswer.answer,
+    finalAnswer.usage,
+    steps.length + 1,
+    true,
+  );
+  steps.push(finalStep);
+  callbacks.onStep(finalStep);
+  logAgentStep(options.runId, finalStep);
+  logAgentInfo(options.runId, 'model_answer_received', {
+    answer: finalAnswer.answer,
+    answerLength: finalAnswer.answer.length,
+    model: finalAnswer.model,
+    hasUsage: finalAnswer.usage !== undefined && finalAnswer.usage !== null,
+  });
+
+  return {
+    model: finalAnswer.model,
+    answer: finalAnswer.answer,
+    steps: steps,
+    usage: finalAnswer.usage,
   };
 }

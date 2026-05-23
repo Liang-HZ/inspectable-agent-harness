@@ -26,14 +26,18 @@ flowchart TD
   Playground --> AgentBrowserClient[lib/agent-api-client.ts]
   BrowserClient --> ChatRoute[app/api/chat/route.ts]
   AgentBrowserClient --> AgentRoute[app/api/agent/route.ts]
+  AgentBrowserClient --> AgentStreamRoute[app/api/agent/stream/route.ts]
 
   ChatRoute --> ChatInput[lib/chat-input.ts]
   ChatRoute --> Env[lib/env.ts]
   ChatRoute --> ChatService[lib/chat.ts]
 
   AgentRoute --> AgentInput[lib/agent-input.ts]
+  AgentStreamRoute --> AgentInput
   AgentRoute --> Env
+  AgentStreamRoute --> Env
   AgentRoute --> AgentService[lib/agent.ts]
+  AgentStreamRoute --> AgentService
   AgentService --> AgentTools[lib/agent-tools.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
@@ -61,6 +65,7 @@ lib/env.ts                          Server-side model configuration
 lib/openai-compatible-client.ts     OpenAI SDK client creation
 lib/chat.ts                         Chat model service
 app/api/agent/route.ts              HTTP entry point for /api/agent
+app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-input.ts                  Zod agent request body parsing and validation
@@ -93,6 +98,9 @@ checking.
 `lib/agent-api-client.ts` owns the `fetch('/api/agent')` call and response shape
 checking.
 
+It also owns the `fetch('/api/agent/stream')` call and SSE parsing for dynamic
+agent runs.
+
 These clients should convert unknown JSON into typed API responses before the
 React component uses them.
 
@@ -118,6 +126,14 @@ inside route handlers.
 - read model config
 - call `runAgent(...)`
 - return `NextResponse.json(...)`
+
+`app/api/agent/stream/route.ts` follows the same validation and configuration
+boundary, then returns Server-Sent Events:
+
+- `step` events append inspectable agent steps
+- `answerDelta` events stream final answer text
+- `done` events carry the final `AgentResult`
+- `error` events carry stream-time failures
 
 ### Input Validation
 
@@ -167,6 +183,7 @@ The first agent endpoint uses the same layered shape:
 
 ```text
 app/api/agent/route.ts              HTTP entry point for /api/agent
+app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-types.ts              Shared API request/response types
 lib/agent-input.ts                  Zod request body parsing and validation
 lib/agent-log.ts                    Structured server log helpers
@@ -174,8 +191,10 @@ lib/agent-tools.ts                  Local tool definitions and execution
 lib/agent.ts                        Agent orchestration service
 ```
 
-This version has a small tool loop. The model can answer directly, or it can
-request the local `inspect_text` tool before the final answer:
+This version has a small tool loop plus a streaming route. The model can answer
+directly, or it can request the local `inspect_text` tool before the final
+answer. In the UI, steps arrive as soon as the backend emits them, and final
+answer text arrives as `answerDelta` events:
 
 ```mermaid
 flowchart TD
