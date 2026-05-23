@@ -34,6 +34,7 @@ flowchart TD
   AgentRoute --> AgentInput[lib/agent-input.ts]
   AgentRoute --> Env
   AgentRoute --> AgentService[lib/agent.ts]
+  AgentService --> AgentTools[lib/agent-tools.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   AgentService --> OpenAIClient
@@ -63,7 +64,9 @@ app/api/agent/route.ts              HTTP entry point for /api/agent
 lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-input.ts                  Zod agent request body parsing and validation
-lib/agent.ts                        Single-step agent orchestration service
+lib/agent-log.ts                    Structured server log helpers for agent runs
+lib/agent-tools.ts                  Local agent tool definitions and execution
+lib/agent.ts                        Tool-using agent orchestration service
 ```
 
 ## Boundary Rules
@@ -136,8 +139,21 @@ a plain `ChatResult`.
 
 `lib/agent.ts` owns the first agent orchestration path.
 
-It receives `AgentInput` and `ModelConfig`, builds a single model prompt, calls
-the model, and returns a plain `AgentResult` with inspectable steps.
+It receives `AgentInput` and `ModelConfig`, builds a model prompt, asks the
+model whether it needs a local tool, executes requested tools, asks the model
+for a final answer when a tool was used, and returns a plain `AgentResult` with
+inspectable steps.
+
+`lib/agent-tools.ts` owns local agent tools.
+
+It exposes Chat Completions tool definitions and executes validated local tool
+calls. The first tool is `inspect_text`, which returns basic text statistics.
+
+`lib/agent-log.ts` owns structured server logs for `/api/agent`.
+
+Agent logs include a per-request `runId`, event names, full parsed user input,
+the assembled model prompt, each step output, final answer, model metadata, and
+field lengths. They should not include API keys or other environment secrets.
 
 ### Environment
 
@@ -153,25 +169,32 @@ The first agent endpoint uses the same layered shape:
 app/api/agent/route.ts              HTTP entry point for /api/agent
 lib/agent-api-types.ts              Shared API request/response types
 lib/agent-input.ts                  Zod request body parsing and validation
+lib/agent-log.ts                    Structured server log helpers
+lib/agent-tools.ts                  Local tool definitions and execution
 lib/agent.ts                        Agent orchestration service
 ```
 
-This version is intentionally single-step. It returns inspectable steps before
-the project adds tool decisions or local tool execution:
+This version has a small tool loop. The model can answer directly, or it can
+request the local `inspect_text` tool before the final answer:
 
 ```mermaid
 flowchart TD
   AgentRoute[app/api/agent/route.ts] --> AgentInput[lib/agent-input.ts]
   AgentRoute --> AgentService[lib/agent.ts]
-  AgentService --> ModelCall[Model call]
-  AgentService --> AgentResponse[Final answer plus steps]
+  AgentService --> DecisionCall[Model decision call]
+  DecisionCall --> DirectAnswer[Direct answer]
+  DecisionCall --> ToolCall[Tool call request]
+  ToolCall --> AgentTools[lib/agent-tools.ts]
+  AgentTools --> FinalCall[Final model call with tool result]
+  DirectAnswer --> AgentResponse[Final answer plus steps]
+  FinalCall --> AgentResponse
 ```
 
 The next agent boundary can add these modules when the runtime needs them:
 
 ```text
 lib/agent-state.ts                  Agent state/action types
-lib/tools/*.ts                      Local tool definitions and execution
+lib/tools/*.ts                      Larger tool families
 ```
 
 ## Maintenance Rule

@@ -233,6 +233,16 @@ pre {
   color: #17201b;
 }
 
+.stepOutput {
+  margin-top: 8px;
+  border: 1px solid #e4dfd3;
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;

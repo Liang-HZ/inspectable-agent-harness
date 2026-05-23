@@ -12,6 +12,7 @@ export const agentStepSchema = z.strictObject({
   order: z.number(),
   title: z.string(),
   detail: z.string(),
+  output: z.unknown().optional(),
 });
 
 export type AgentStep = z.infer<typeof agentStepSchema>;

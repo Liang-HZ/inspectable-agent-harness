@@ -310,6 +310,14 @@ function firstAgentValidationMessage(
   );
 }
 
+function formatStepOutput(output: unknown): string {
+  if (output === undefined) {
+    return '';
+  }
+
+  return JSON.stringify(output, null, 2);
+}
+
 export function ChatPlayground() {
   const [state, dispatch] = useReducer(workbenchReducer, initialState);
   const chatIsSubmitting = state.chatView.status === 'submitting';
@@ -534,6 +542,11 @@ export function ChatPlayground() {
                   <li key={step.order}>
                     <strong>{step.title}</strong>
                     <span>{step.detail}</span>
+                    {step.output === undefined ? null : (
+                      <pre className="stepOutput">
+                        {formatStepOutput(step.output)}
+                      </pre>
+                    )}
                   </li>
                 ))}
               </ol>
