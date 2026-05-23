@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useReducer } from 'react';
+import { FormEvent, ReactNode, useReducer } from 'react';
 
 import { requestAgentRun } from '../lib/agent-api-client';
 import type { AgentApiResponse } from '../lib/agent-api-types';
@@ -119,11 +119,56 @@ type WorkbenchAction =
       response: AgentApiResponse;
     };
 
+type TextFieldProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  inputMode?: 'decimal' | 'text';
+  placeholder?: string;
+};
+
+type TextAreaFieldProps = TextFieldProps & {
+  rows?: number;
+};
+
+type ModeSwitcherProps = {
+  mode: WorkbenchMode;
+  onModeChange: (mode: WorkbenchMode) => void;
+};
+
+type ChatFormProps = {
+  form: ChatFormState;
+  isSubmitting: boolean;
+  canSubmit: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onMessageChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+  onTemperatureChange: (value: string) => void;
+};
+
+type AgentFormProps = {
+  form: AgentFormState;
+  isSubmitting: boolean;
+  canSubmit: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onTaskChange: (value: string) => void;
+  onGoalChange: (value: string) => void;
+  onContextChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+  onTemperatureChange: (value: string) => void;
+};
+
+type ResultPanelProps = {
+  mode: WorkbenchMode;
+  chatView: ChatViewState;
+  agentView: AgentViewState;
+};
+
 const initialState: WorkbenchState = {
   mode: 'agent',
   chatForm: {
     message: '人生的意义是什么。',
-    model: 'glm-4.7',
+    model: 'gpt-5.5',
     temperature: '0.7',
   },
   chatView: {
@@ -131,12 +176,11 @@ const initialState: WorkbenchState = {
     response: null,
   },
   agentForm: {
-    task: '帮我把“调用模型”这件事拆成后端 agent 的下一步能力。',
-    goal: '给出清晰、可执行、适合逐步实现的建议。',
-    context:
-      '当前项目已经有 /api/chat，可以调用 OpenAI-compatible Chat Completions。',
-    model: 'glm-4.7',
-    temperature: '0.4',
+    task: '请统计这段文本的字符数、行数和词数：hello world\nsecond line',
+    goal: '请使用可用工具得到准确统计。',
+    context: '这是一次调试请求。',
+    model: 'gpt-5.5',
+    temperature: '0.7',
   },
   agentView: {
     status: 'idle',
@@ -310,12 +354,321 @@ function firstAgentValidationMessage(
   );
 }
 
-function formatStepOutput(output: unknown): string {
-  if (output === undefined) {
-    return '';
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function statusText(
+  mode: WorkbenchMode,
+  chatView: ChatViewState,
+  agentView: AgentViewState,
+): string {
+  const currentStatus = mode === 'agent' ? agentView.status : chatView.status;
+
+  if (currentStatus === 'submitting') {
+    return 'Running';
   }
 
-  return JSON.stringify(output, null, 2);
+  if (currentStatus === 'success') {
+    return 'Ready';
+  }
+
+  if (currentStatus === 'error') {
+    return 'Error';
+  }
+
+  return 'Idle';
+}
+
+function modelLabel(mode: WorkbenchMode, state: WorkbenchState): string {
+  const model = mode === 'agent' ? state.agentForm.model : state.chatForm.model;
+  return model.trim() === '' ? 'env OPENAI_MODEL' : model;
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  inputMode = 'text',
+  placeholder,
+}: TextFieldProps) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        value={value}
+        inputMode={inputMode}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function TextAreaField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  rows = 5,
+}: TextAreaFieldProps) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <textarea
+        rows={rows}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function ModeSwitcher({ mode, onModeChange }: ModeSwitcherProps) {
+  return (
+    <div className="modeSwitcher" aria-label="API mode">
+      <button
+        type="button"
+        className={
+          mode === 'agent' ? 'modeButton activeModeButton' : 'modeButton'
+        }
+        onClick={() => onModeChange('agent')}
+      >
+        Agent
+      </button>
+      <button
+        type="button"
+        className={
+          mode === 'chat' ? 'modeButton activeModeButton' : 'modeButton'
+        }
+        onClick={() => onModeChange('chat')}
+      >
+        Chat
+      </button>
+    </div>
+  );
+}
+
+function SubmitButton({
+  isSubmitting,
+  disabled,
+  children,
+}: {
+  isSubmitting: boolean;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button className="primaryButton" type="submit" disabled={disabled}>
+      <span
+        className={isSubmitting ? 'buttonDot activeButtonDot' : 'buttonDot'}
+      />
+      {children}
+    </button>
+  );
+}
+
+function ModelControls({
+  model,
+  temperature,
+  onModelChange,
+  onTemperatureChange,
+}: {
+  model: string;
+  temperature: string;
+  onModelChange: (value: string) => void;
+  onTemperatureChange: (value: string) => void;
+}) {
+  return (
+    <div className="controlGrid">
+      <TextField
+        label="Model"
+        value={model}
+        placeholder="env OPENAI_MODEL"
+        onChange={onModelChange}
+      />
+      <TextField
+        label="Temperature"
+        value={temperature}
+        inputMode="decimal"
+        onChange={onTemperatureChange}
+      />
+    </div>
+  );
+}
+
+function AgentForm({
+  form,
+  isSubmitting,
+  canSubmit,
+  onSubmit,
+  onTaskChange,
+  onGoalChange,
+  onContextChange,
+  onModelChange,
+  onTemperatureChange,
+}: AgentFormProps) {
+  return (
+    <form className="requestForm" onSubmit={onSubmit}>
+      <TextAreaField label="Task" value={form.task} onChange={onTaskChange} />
+      <TextField label="Goal" value={form.goal} onChange={onGoalChange} />
+      <TextAreaField
+        label="Context"
+        value={form.context}
+        onChange={onContextChange}
+        rows={3}
+      />
+      <ModelControls
+        model={form.model}
+        temperature={form.temperature}
+        onModelChange={onModelChange}
+        onTemperatureChange={onTemperatureChange}
+      />
+      <SubmitButton isSubmitting={isSubmitting} disabled={!canSubmit}>
+        {isSubmitting ? 'Running agent' : 'Run agent'}
+      </SubmitButton>
+    </form>
+  );
+}
+
+function ChatForm({
+  form,
+  isSubmitting,
+  canSubmit,
+  onSubmit,
+  onMessageChange,
+  onModelChange,
+  onTemperatureChange,
+}: ChatFormProps) {
+  return (
+    <form className="requestForm" onSubmit={onSubmit}>
+      <TextAreaField
+        label="Message"
+        value={form.message}
+        onChange={onMessageChange}
+      />
+      <ModelControls
+        model={form.model}
+        temperature={form.temperature}
+        onModelChange={onModelChange}
+        onTemperatureChange={onTemperatureChange}
+      />
+      <SubmitButton isSubmitting={isSubmitting} disabled={!canSubmit}>
+        {isSubmitting ? 'Calling model' : 'Call model'}
+      </SubmitButton>
+    </form>
+  );
+}
+
+function EmptyState({ children }: { children: ReactNode }) {
+  return <div className="emptyState">{children}</div>;
+}
+
+function ErrorState({ children }: { children: ReactNode }) {
+  return <div className="errorState">{children}</div>;
+}
+
+function AgentTrace({
+  response,
+}: {
+  response: Extract<AgentApiResponse, { ok: true }>;
+}) {
+  return (
+    <div className="traceList">
+      {response.result.steps.map((step) => (
+        <article className="traceItem" key={step.order}>
+          <div className="traceIndex">{step.order}</div>
+          <div className="traceContent">
+            <div className="traceTitleRow">
+              <h3>{step.title}</h3>
+              <span>{step.detail}</span>
+            </div>
+            {step.output === undefined ? null : (
+              <pre className="jsonBlock">{formatJson(step.output)}</pre>
+            )}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function AgentResultView({ view }: { view: AgentViewState }) {
+  if (view.status === 'idle') {
+    return <EmptyState>Agent result will appear here.</EmptyState>;
+  }
+
+  if (view.status === 'submitting') {
+    return <EmptyState>Running agent...</EmptyState>;
+  }
+
+  if (view.status === 'error') {
+    return (
+      <ErrorState>{firstAgentValidationMessage(view.response)}</ErrorState>
+    );
+  }
+
+  return (
+    <div className="resultStack">
+      <section className="answerPanel">
+        <div className="sectionHeader">
+          <span>Answer</span>
+          <code>{view.response.result.model}</code>
+        </div>
+        <pre className="answerText">{view.response.result.answer}</pre>
+      </section>
+      <section className="tracePanel">
+        <div className="sectionHeader">
+          <span>Trace</span>
+          <code>{view.response.result.steps.length} steps</code>
+        </div>
+        <AgentTrace response={view.response} />
+      </section>
+    </div>
+  );
+}
+
+function ChatResultView({ view }: { view: ChatViewState }) {
+  if (view.status === 'idle') {
+    return <EmptyState>Response will appear here.</EmptyState>;
+  }
+
+  if (view.status === 'submitting') {
+    return <EmptyState>Calling model...</EmptyState>;
+  }
+
+  if (view.status === 'error') {
+    return <ErrorState>{firstChatValidationMessage(view.response)}</ErrorState>;
+  }
+
+  return (
+    <section className="answerPanel">
+      <div className="sectionHeader">
+        <span>Response</span>
+        <code>{view.response.result.model}</code>
+      </div>
+      <pre className="answerText">{view.response.result.content}</pre>
+    </section>
+  );
+}
+
+function ResultPanel({ mode, chatView, agentView }: ResultPanelProps) {
+  return (
+    <section className="workspacePanel resultPanel" aria-live="polite">
+      <div className="panelHeader">
+        <div>
+          <span className="panelKicker">Output</span>
+          <h2>{mode === 'agent' ? 'Agent run' : 'Chat completion'}</h2>
+        </div>
+      </div>
+      {mode === 'agent' ? (
+        <AgentResultView view={agentView} />
+      ) : (
+        <ChatResultView view={chatView} />
+      )}
+    </section>
+  );
 }
 
 export function ChatPlayground() {
@@ -362,216 +715,108 @@ export function ChatPlayground() {
   }
 
   return (
-    <main className="shell">
-      <section className="panel">
+    <main className="appShell">
+      <header className="topBar">
         <div>
-          <p className="eyebrow">Next.js API Workbench</p>
-          <h1>Model backend</h1>
-          <p className="lede">
-            Chat stays as the direct model call. Agent adds task, goal, context,
-            and inspectable execution steps.
-          </p>
+          <span className="productLabel">Next.js API Workbench</span>
+          <h1>Model Backend</h1>
         </div>
-
-        <div className="tabs" aria-label="API mode">
-          <button
-            type="button"
-            className={state.mode === 'agent' ? 'tab activeTab' : 'tab'}
-            onClick={() => dispatch({ type: 'modeChanged', mode: 'agent' })}
-          >
-            Agent
-          </button>
-          <button
-            type="button"
-            className={state.mode === 'chat' ? 'tab activeTab' : 'tab'}
-            onClick={() => dispatch({ type: 'modeChanged', mode: 'chat' })}
-          >
-            Chat
-          </button>
+        <div className="runMeta">
+          <span>{modelLabel(state.mode, state)}</span>
+          <strong>
+            {statusText(state.mode, state.chatView, state.agentView)}
+          </strong>
         </div>
+      </header>
 
-        {state.mode === 'agent' ? (
-          <form className="form" onSubmit={submitAgent}>
-            <label>
-              <span>Task</span>
-              <textarea
-                value={state.agentForm.task}
-                onChange={(event) =>
-                  dispatch({
-                    type: 'agentTaskChanged',
-                    value: event.target.value,
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              <span>Goal</span>
-              <input
-                value={state.agentForm.goal}
-                onChange={(event) =>
-                  dispatch({
-                    type: 'agentGoalChanged',
-                    value: event.target.value,
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              <span>Context</span>
-              <textarea
-                className="compactTextarea"
-                value={state.agentForm.context}
-                onChange={(event) =>
-                  dispatch({
-                    type: 'agentContextChanged',
-                    value: event.target.value,
-                  })
-                }
-              />
-            </label>
-
-            <div className="grid">
-              <label>
-                <span>Model</span>
-                <input
-                  value={state.agentForm.model}
-                  onChange={(event) =>
-                    dispatch({
-                      type: 'agentModelChanged',
-                      value: event.target.value,
-                    })
-                  }
-                  placeholder="env OPENAI_MODEL"
-                />
-              </label>
-
-              <label>
-                <span>Temperature</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={state.agentForm.temperature}
-                  onChange={(event) =>
-                    dispatch({
-                      type: 'agentTemperatureChanged',
-                      value: event.target.value,
-                    })
-                  }
-                />
-              </label>
+      <section className="workspaceGrid">
+        <section className="workspacePanel requestPanel">
+          <div className="panelHeader">
+            <div>
+              <span className="panelKicker">Request</span>
+              <h2>{state.mode === 'agent' ? 'Agent' : 'Chat'}</h2>
             </div>
+            <ModeSwitcher
+              mode={state.mode}
+              onModeChange={(mode) =>
+                dispatch({
+                  type: 'modeChanged',
+                  mode: mode,
+                })
+              }
+            />
+          </div>
 
-            <button type="submit" disabled={!agentCanSubmit}>
-              {agentIsSubmitting ? 'Running...' : 'Run agent'}
-            </button>
-          </form>
-        ) : (
-          <form className="form" onSubmit={submitChat}>
-            <label>
-              <span>Message</span>
-              <textarea
-                value={state.chatForm.message}
-                onChange={(event) =>
-                  dispatch({
-                    type: 'chatMessageChanged',
-                    value: event.target.value,
-                  })
-                }
-              />
-            </label>
-
-            <div className="grid">
-              <label>
-                <span>Model</span>
-                <input
-                  value={state.chatForm.model}
-                  onChange={(event) =>
-                    dispatch({
-                      type: 'chatModelChanged',
-                      value: event.target.value,
-                    })
-                  }
-                  placeholder="env OPENAI_MODEL"
-                />
-              </label>
-
-              <label>
-                <span>Temperature</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={state.chatForm.temperature}
-                  onChange={(event) =>
-                    dispatch({
-                      type: 'chatTemperatureChanged',
-                      value: event.target.value,
-                    })
-                  }
-                />
-              </label>
-            </div>
-
-            <button type="submit" disabled={!chatCanSubmit}>
-              {chatIsSubmitting ? 'Calling...' : 'Call model'}
-            </button>
-          </form>
-        )}
-      </section>
-
-      <section className="result" aria-live="polite">
-        <div className="resultHeader">
-          <span>{state.mode === 'agent' ? 'Agent result' : 'Response'}</span>
-          {state.mode === 'agent' && state.agentView.status === 'success' ? (
-            <code>{state.agentView.response.result.model}</code>
-          ) : state.mode === 'chat' && state.chatView.status === 'success' ? (
-            <code>{state.chatView.response.result.model}</code>
-          ) : null}
-        </div>
-
-        {state.mode === 'agent' ? (
-          state.agentView.status === 'success' ? (
-            <div className="resultBody">
-              <ol className="steps">
-                {state.agentView.response.result.steps.map((step) => (
-                  <li key={step.order}>
-                    <strong>{step.title}</strong>
-                    <span>{step.detail}</span>
-                    {step.output === undefined ? null : (
-                      <pre className="stepOutput">
-                        {formatStepOutput(step.output)}
-                      </pre>
-                    )}
-                  </li>
-                ))}
-              </ol>
-              <pre>{state.agentView.response.result.answer}</pre>
-            </div>
+          {state.mode === 'agent' ? (
+            <AgentForm
+              form={state.agentForm}
+              isSubmitting={agentIsSubmitting}
+              canSubmit={agentCanSubmit}
+              onSubmit={submitAgent}
+              onTaskChange={(value) =>
+                dispatch({
+                  type: 'agentTaskChanged',
+                  value: value,
+                })
+              }
+              onGoalChange={(value) =>
+                dispatch({
+                  type: 'agentGoalChanged',
+                  value: value,
+                })
+              }
+              onContextChange={(value) =>
+                dispatch({
+                  type: 'agentContextChanged',
+                  value: value,
+                })
+              }
+              onModelChange={(value) =>
+                dispatch({
+                  type: 'agentModelChanged',
+                  value: value,
+                })
+              }
+              onTemperatureChange={(value) =>
+                dispatch({
+                  type: 'agentTemperatureChanged',
+                  value: value,
+                })
+              }
+            />
           ) : (
-            <pre>
-              {state.agentView.status === 'error'
-                ? firstAgentValidationMessage(state.agentView.response)
-                : state.agentView.status === 'submitting'
-                  ? 'Running agent...'
-                  : 'Agent result will appear here.'}
-            </pre>
-          )
-        ) : (
-          <pre>
-            {state.chatView.status === 'success'
-              ? state.chatView.response.result.content
-              : state.chatView.status === 'error'
-                ? firstChatValidationMessage(state.chatView.response)
-                : state.chatView.status === 'submitting'
-                  ? 'Calling model...'
-                  : 'Result will appear here.'}
-          </pre>
-        )}
+            <ChatForm
+              form={state.chatForm}
+              isSubmitting={chatIsSubmitting}
+              canSubmit={chatCanSubmit}
+              onSubmit={submitChat}
+              onMessageChange={(value) =>
+                dispatch({
+                  type: 'chatMessageChanged',
+                  value: value,
+                })
+              }
+              onModelChange={(value) =>
+                dispatch({
+                  type: 'chatModelChanged',
+                  value: value,
+                })
+              }
+              onTemperatureChange={(value) =>
+                dispatch({
+                  type: 'chatTemperatureChanged',
+                  value: value,
+                })
+              }
+            />
+          )}
+        </section>
+
+        <ResultPanel
+          mode={state.mode}
+          chatView={state.chatView}
+          agentView={state.agentView}
+        />
       </section>
     </main>
   );
