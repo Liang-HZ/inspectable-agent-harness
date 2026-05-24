@@ -42,6 +42,9 @@ flowchart TD
   AgentService --> AgentRunContext[lib/agent-run-context.ts]
   AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
+  ModelGateway --> ModelDialect[lib/model-provider-dialect.ts]
+  ModelDialect --> ChatDialect[lib/openai-chat-completions-dialect.ts]
+  ModelDialect --> ResponsesDialect[lib/openai-responses-dialect.ts]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
 
@@ -71,9 +74,14 @@ lib/openai-compatible-client.ts     OpenAI SDK client creation
 lib/chat.ts                         Chat model service
 app/api/agent/route.ts              HTTP entry point for /api/agent
 app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
+app/api/agent/sessions/route.ts     HTTP entry point for listing agent sessions
+app/api/agent/sessions/[id]/route.ts HTTP entry point for reading one agent session
 lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
+lib/agent-model-types.ts            Provider-neutral model request/response/event types
+lib/agent-model-stages.ts           Shared model-call stage constants
+lib/agent-usage.ts                  Token usage normalization and aggregation
 lib/agent-input.ts                  Zod agent request body parsing and validation
 lib/agent-permissions.ts            Approval policy, sandbox mode, and permission decisions
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
@@ -82,7 +90,10 @@ lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Local agent tool registry and concrete handlers
-lib/model-gateway.ts                Model provider call boundary for agent runs
+lib/model-provider-dialect.ts       Provider dialect contract
+lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
+lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
+lib/model-gateway.ts                Provider dialect selection and model call boundary
 lib/agent.ts                        Tool-using agent orchestration service
 ```
 
@@ -212,6 +223,87 @@ records each runtime permission decision. `approval_requested` records that a
 tool call needs user approval, but interactive approval resume is not
 implemented yet.
 
+`lib/agent-model-stages.ts` owns the shared model-call stage names used by
+events and usage records. This avoids redefining string stage names separately
+in event and response contracts.
+
+`lib/agent-model-types.ts` owns the provider-neutral model IR for the agent
+runtime.
+
+This is the anti-corruption layer between the agent loop and provider protocols.
+`lib/agent.ts` talks in terms of:
+
+```ts
+AgentModelMessage;
+AgentModelToolDefinition;
+AgentModelToolCall;
+AgentModelRequest;
+AgentModelResponse;
+AgentModelStreamEvent;
+```
+
+It must not import OpenAI Chat Completions, OpenAI Responses, Anthropic
+Messages, or any other provider wire types. This is the same architectural role
+that a database query AST plays before a SQL dialect compiles it to one
+database's SQL.
+
+`lib/model-provider-dialect.ts` owns the provider dialect contract.
+
+A dialect is responsible for compiling the agent model IR into one wire API and
+parsing provider output back into provider-neutral responses/events. The current
+dialects are:
+
+```text
+openai-chat-completions  lib/openai-chat-completions-dialect.ts
+openai-responses         lib/openai-responses-dialect.ts
+```
+
+Both dialects expose the same capabilities shape:
+
+```ts
+type AgentModelCapabilities = {
+  tools: boolean;
+  streaming: boolean;
+  streamingUsage: boolean;
+  parallelToolCalls: boolean;
+};
+```
+
+Provider quirks should stay in dialect files. Runtime code should not branch on
+provider-specific fields like `tool_calls`, `function_call_output`,
+`response.output_text.delta`, or `stream_options`.
+
+`lib/agent-usage.ts` owns token usage normalization and aggregation.
+
+Single model-call token numbers come from provider dialects. OpenAI Chat
+Completions maps `prompt_tokens`, `completion_tokens`, and `total_tokens`.
+OpenAI Responses maps `input_tokens`, `output_tokens`, and `total_tokens`. The
+agent normalizes those raw values into:
+
+```ts
+type AgentTokenUsage = {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+};
+```
+
+`AgentResult.usage` keeps both the per-call records and the runtime-computed
+total:
+
+```ts
+type AgentUsage = {
+  totalTokenUsage: AgentTokenUsage;
+  lastTokenUsage: AgentTokenUsage | null;
+  calls: AgentModelCallUsage[];
+};
+```
+
+The runtime only sums calls that include token usage. Each call still keeps
+`rawUsage` so provider-specific fields are not lost.
+
 `lib/agent-session-store.ts` owns JSONL session rollout files.
 
 It writes inspectable append-only session records for streaming agent runs. Each
@@ -230,6 +322,18 @@ input, prompts, tool arguments, model output, and other sensitive runtime data.
 This module is currently used by `/api/agent/stream`; `/api/agent` can be wired
 to the same store after the non-streaming path emits `AgentEvent`.
 
+`app/api/agent/sessions/route.ts` exposes `GET /api/agent/sessions`.
+
+It lists local JSONL sessions and returns summaries such as session id, created
+time, updated time, model, wire API, approval policy, sandbox mode, record
+count, and relative path. It does not return full records.
+
+`app/api/agent/sessions/[id]/route.ts` exposes `GET /api/agent/sessions/:id`.
+
+It reads one JSONL session by `session_meta.payload.id` and returns the parsed
+records. This is an inspect/debug API only. It does not resume a run and does
+not reconstruct model-visible history.
+
 For `model_started`, the `stage` field describes why the model call is starting.
 `tool_or_answer_selection` means the agent is asking the model to choose whether
 to answer directly or request a tool. `answer_generation` means the agent is
@@ -242,10 +346,11 @@ instead of scattered callbacks.
 
 `lib/model-gateway.ts` owns model provider calls for agent runs.
 
-It creates the OpenAI-compatible SDK client, applies the configured model,
-forwards the agent run `AbortSignal`, and exposes narrow `createChatCompletion`
-and `streamChatCompletion` methods. This module is the first place to add
-provider adapters for Anthropic or other non-OpenAI message formats.
+It creates the OpenAI SDK client, selects the configured dialect from
+`OPENAI_WIRE_API`, applies the configured model, forwards the agent run
+`AbortSignal`, and exposes narrow provider-neutral `createResponse` and
+`streamResponse` methods. This module should remain a gateway and registry
+boundary. Protocol details belong in dialect files.
 
 `lib/agent-tool-runtime.ts` owns the tool execution lifecycle.
 
@@ -259,8 +364,9 @@ resume, and output validation at this boundary.
 `lib/agent-tools.ts` owns the local tool registry and concrete local agent
 tools.
 
-Each tool definition groups the tool name, the Chat Completions tool definition,
-tool annotations, argument parsing, and the concrete handler. The first
+Each tool definition groups the tool name, provider-neutral model tool metadata,
+tool annotations, argument parsing, and the concrete handler. Dialects compile
+the provider-neutral tool metadata into their own wire format. The first
 registered tool is `inspect_text`, which returns basic text statistics.
 
 `lib/agent-log.ts` owns structured server logs for `/api/agent`.
@@ -275,6 +381,15 @@ field lengths. They should not include API keys or other environment secrets.
 
 Browser files should not import this module.
 
+Current model-related variables are:
+
+```text
+OPENAI_API_KEY
+OPENAI_BASE_URL
+OPENAI_MODEL
+OPENAI_WIRE_API=openai-chat-completions | openai-responses
+```
+
 ## Agent Shape
 
 The first agent endpoint uses the same layered shape:
@@ -282,8 +397,13 @@ The first agent endpoint uses the same layered shape:
 ```text
 app/api/agent/route.ts              HTTP entry point for /api/agent
 app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
+app/api/agent/sessions/route.ts     HTTP entry point for listing agent sessions
+app/api/agent/sessions/[id]/route.ts HTTP entry point for reading one agent session
 lib/agent-api-types.ts              Shared API request/response types
 lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
+lib/agent-model-types.ts            Provider-neutral model request/response/event types
+lib/agent-model-stages.ts           Shared model-call stage constants
+lib/agent-usage.ts                  Token usage normalization and aggregation
 lib/agent-input.ts                  Zod request body parsing and validation
 lib/agent-permissions.ts            Approval and sandbox policy decisions
 lib/agent-run-context.ts            Per-run lifecycle context and cancellation
@@ -292,7 +412,10 @@ lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers
 lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
 lib/agent-tools.ts                  Concrete local tool registry and handlers
-lib/model-gateway.ts                Model provider boundary for agent runtime
+lib/model-provider-dialect.ts       Provider dialect contract
+lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
+lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
+lib/model-gateway.ts                Provider dialect selection and model call boundary
 lib/agent.ts                        Agent orchestration service
 ```
 
@@ -308,6 +431,9 @@ flowchart TD
   AgentService --> RunContext[lib/agent-run-context.ts]
   AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
+  ModelGateway --> ModelDialect[lib/model-provider-dialect.ts]
+  ModelDialect --> ChatDialect[OpenAI Chat Completions dialect]
+  ModelDialect --> ResponsesDialect[OpenAI Responses dialect]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   AgentService --> DecisionCall[Model decision call]
   ModelGateway --> DecisionCall
@@ -352,8 +478,8 @@ sequenceDiagram
   Route-->>Client: SSE step
   Client-->>UI: onStep(event)
   UI->>UI: dispatch(agentStepReceived)
-  Agent->>Gateway: Decision call with tools
-  Gateway->>Model: Chat completion with signal
+  Agent->>Gateway: Provider-neutral decision request with tools
+  Gateway->>Model: Dialect-compiled model request with signal
   alt Model requests inspect_text
     Agent->>ToolRuntime: executeAgentToolCalls(toolCalls)
     ToolRuntime->>Tools: execute concrete tool handler
@@ -364,9 +490,9 @@ sequenceDiagram
     Route-->>Client: SSE step
     Client-->>UI: onStep(event)
     UI->>UI: dispatch(agentStepReceived)
-    Agent->>Gateway: Stream final answer with tool result
+    Agent->>Gateway: Stream final answer with tool result through selected dialect
   else Model can answer directly
-    Agent->>Gateway: Stream final answer directly
+    Agent->>Gateway: Stream final answer directly through selected dialect
   end
   loop Model answer chunks
     Model-->>Gateway: delta
@@ -573,10 +699,10 @@ Example file:
 
 ```text
 {"timestamp":"...","type":"session_meta","payload":{"id":"...","cwd":"...","source":"api_agent_stream",...}}
-{"timestamp":"...","type":"turn_context","payload":{"turnId":"...","model":"...","approvalPolicy":"on_request","sandboxMode":"read_only"}}
+{"timestamp":"...","type":"turn_context","payload":{"turnId":"...","model":"...","wireApi":"openai-chat-completions","approvalPolicy":"on_request","sandboxMode":"read_only"}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_started","runId":"..."}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"step_created","step":{...}}}
-{"timestamp":"...","type":"agent_event","payload":{"type":"run_succeeded","result":{...}}}
+{"timestamp":"...","type":"agent_event","payload":{"type":"run_succeeded","result":{"usage":{"totalTokenUsage":{...},"lastTokenUsage":{...},"calls":[...]}}}}
 ```
 
 Current guarantees:
@@ -586,6 +712,8 @@ Current guarantees:
 - writes are synchronous in the current request so write failures fail fast
 - session files survive process restart
 - session files are not committed to git
+- local API clients can list sessions and read full records by id
+- final results include normalized per-call token usage and summed token usage
 
 Current limitations:
 
@@ -594,6 +722,7 @@ Current limitations:
 - no `response_item` rows yet
 - no model-history reconstruction yet
 - approval resume is not implemented yet
+- session read/list APIs are for local inspection and debugging
 
 Future session work should add:
 
@@ -601,8 +730,8 @@ Future session work should add:
 response_item    provider-neutral model-visible history
 event_msg        UI/internal events that are not model-visible
 compacted        summary plus optional replacement history
-resume API       reconstruct AgentRunState and model history from JSONL
 approval API     approve or deny a pending approval_requested event
+resume API       reconstruct AgentRunState and model history from JSONL
 ```
 
 The next agent boundary can add these modules when the runtime needs them:
@@ -662,11 +791,10 @@ The current implementation is intentionally small:
 
 Future work should grow the harness in this order:
 
-1. add read/list APIs for JSONL sessions
-2. add interactive approval resume and user-input events
-3. add provider-neutral `response_item` records for model-visible history
-4. enforce sandbox mode for file, shell, network, or external API tools
-5. add compaction and history reconstruction
+1. add interactive approval resume and user-input events
+2. add provider-neutral `response_item` records for model-visible history
+3. enforce sandbox mode for file, shell, network, or external API tools
+4. add compaction and history reconstruction
 
 ## Maintenance Rule
 

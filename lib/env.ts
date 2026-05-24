@@ -1,7 +1,10 @@
 import * as z from 'zod';
 
+import { AGENT_MODEL_WIRE_APIS } from './agent-model-types';
+
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MODEL = 'gpt-5.5';
+const DEFAULT_WIRE_API = 'openai-chat-completions';
 const MISSING_API_KEY_ERROR =
   'Missing OPENAI_API_KEY in environment variables.';
 
@@ -11,6 +14,7 @@ export const modelConfigSchema = z.strictObject({
   }),
   baseURL: z.string().min(1),
   model: z.string().min(1),
+  wireApi: z.enum(AGENT_MODEL_WIRE_APIS),
 });
 
 export type ModelConfig = z.infer<typeof modelConfigSchema>;
@@ -36,6 +40,7 @@ export function readModelConfig(modelOverride?: string): ReadModelConfigResult {
     baseURL: readOptionalEnvString('OPENAI_BASE_URL') ?? DEFAULT_BASE_URL,
     model:
       modelOverride ?? readOptionalEnvString('OPENAI_MODEL') ?? DEFAULT_MODEL,
+    wireApi: readOptionalEnvString('OPENAI_WIRE_API') ?? DEFAULT_WIRE_API,
   });
 
   if (!parsedConfig.success) {

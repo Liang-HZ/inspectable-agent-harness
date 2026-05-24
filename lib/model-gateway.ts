@@ -1,48 +1,54 @@
-import type {
-  ChatCompletion,
-  ChatCompletionChunk,
-  ChatCompletionCreateParamsNonStreaming,
-  ChatCompletionCreateParamsStreaming,
-} from 'openai/resources/chat/completions';
-
 import {
   assertAgentRunNotAborted,
   type AgentRunContext,
 } from './agent-run-context';
+import type {
+  AgentModelCapabilities,
+  AgentModelRequest,
+  AgentModelResponse,
+  AgentModelStreamEvent,
+  AgentModelWireApi,
+} from './agent-model-types';
 import type { ModelConfig } from './env';
 import { createOpenAICompatibleClient } from './openai-compatible-client';
-
-export type AgentChatCompletionRequest = Omit<
-  ChatCompletionCreateParamsNonStreaming,
-  'model'
->;
-
-export type AgentChatCompletionStreamRequest = Omit<
-  ChatCompletionCreateParamsStreaming,
-  'model' | 'stream'
->;
+import { openAIChatCompletionsDialect } from './openai-chat-completions-dialect';
+import { openAIResponsesDialect } from './openai-responses-dialect';
+import type {
+  ModelProviderDialect,
+  ModelRequestOptions,
+} from './model-provider-dialect';
 
 export type AgentModelGateway = {
   model: string;
-  createChatCompletion: (
-    request: AgentChatCompletionRequest,
-  ) => Promise<ChatCompletion>;
-  streamChatCompletion: (
-    request: AgentChatCompletionStreamRequest,
-  ) => Promise<AsyncIterable<ChatCompletionChunk>>;
+  wireApi: AgentModelWireApi;
+  capabilities: AgentModelCapabilities;
+  createResponse: (request: AgentModelRequest) => Promise<AgentModelResponse>;
+  streamResponse: (
+    request: AgentModelRequest,
+  ) => Promise<AsyncIterable<AgentModelStreamEvent>>;
 };
 
-function sdkRequestOptions(context: AgentRunContext) {
-  return context.signal === undefined ? {} : { signal: context.signal };
+function sdkRequestOptions(context: AgentRunContext): ModelRequestOptions {
+  return {
+    signal: context.signal,
+  };
+}
+
+function selectDialect(wireApi: AgentModelWireApi): ModelProviderDialect {
+  if (wireApi === 'openai-chat-completions') {
+    return openAIChatCompletionsDialect;
+  }
+
+  return openAIResponsesDialect;
 }
 
 async function* guardStreamCancellation(
-  stream: AsyncIterable<ChatCompletionChunk>,
+  stream: AsyncIterable<AgentModelStreamEvent>,
   context: AgentRunContext,
-): AsyncIterable<ChatCompletionChunk> {
-  for await (const chunk of stream) {
+): AsyncIterable<AgentModelStreamEvent> {
+  for await (const event of stream) {
     assertAgentRunNotAborted(context);
-    yield chunk;
+    yield event;
   }
 }
 
@@ -51,40 +57,36 @@ export function createAgentModelGateway(
   context: AgentRunContext,
 ): AgentModelGateway {
   const client = createOpenAICompatibleClient(config);
+  const dialect = selectDialect(config.wireApi);
 
   return {
     model: config.model,
+    wireApi: dialect.wireApi,
+    capabilities: dialect.capabilities,
 
-    async createChatCompletion(
-      request: AgentChatCompletionRequest,
-    ): Promise<ChatCompletion> {
+    async createResponse(
+      request: AgentModelRequest,
+    ): Promise<AgentModelResponse> {
       assertAgentRunNotAborted(context);
-      const completionRequest = {
-        model: config.model,
-        ...request,
-      } satisfies ChatCompletionCreateParamsNonStreaming;
-
-      const completion = await client.chat.completions.create(
-        completionRequest,
+      const response = await dialect.createResponse(
+        client,
+        config,
+        request,
         sdkRequestOptions(context),
       );
       assertAgentRunNotAborted(context);
 
-      return completion;
+      return response;
     },
 
-    async streamChatCompletion(
-      request: AgentChatCompletionStreamRequest,
-    ): Promise<AsyncIterable<ChatCompletionChunk>> {
+    async streamResponse(
+      request: AgentModelRequest,
+    ): Promise<AsyncIterable<AgentModelStreamEvent>> {
       assertAgentRunNotAborted(context);
-      const completionRequest = {
-        model: config.model,
-        stream: true,
-        ...request,
-      } satisfies ChatCompletionCreateParamsStreaming;
-
-      const stream = await client.chat.completions.create(
-        completionRequest,
+      const stream = await dialect.streamResponse(
+        client,
+        config,
+        request,
         sdkRequestOptions(context),
       );
       assertAgentRunNotAborted(context);

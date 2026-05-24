@@ -1,4 +1,5 @@
-import type { AgentResult, AgentStep } from './agent-api-types';
+import type { AgentResult, AgentStep, AgentUsage } from './agent-api-types';
+import type { AgentModelStage } from './agent-model-stages';
 import type {
   AgentPermissionDecision,
   AgentPermissionRequest,
@@ -13,9 +14,6 @@ export type AgentRunStatus =
   | 'succeeded'
   | 'failed'
   | 'cancelled';
-
-export type AgentModelStage = 'tool_or_answer_selection' | 'answer_generation';
-
 export type AgentToolRequestEvent = {
   toolCallId: string;
   toolName: string;
@@ -86,7 +84,7 @@ export type AgentRunState = {
   steps: AgentStep[];
   answer: string;
   model: string | undefined;
-  usage: unknown;
+  usage: AgentUsage | undefined;
   error: string | undefined;
 };
 

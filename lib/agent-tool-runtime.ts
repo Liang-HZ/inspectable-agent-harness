@@ -1,5 +1,4 @@
-import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
-
+import type { AgentModelToolCall } from './agent-model-types';
 import type { AgentEvent } from './agent-events';
 import {
   AgentApprovalRequiredError,
@@ -20,27 +19,23 @@ type AgentToolRuntimeCallbacks = {
   onEvent?: (event: AgentEvent) => void;
 };
 
-function createToolRequestEvent(
-  toolCalls: ChatCompletionMessageFunctionToolCall[],
-): AgentEvent {
+function createToolRequestEvent(toolCalls: AgentModelToolCall[]): AgentEvent {
   return {
     type: 'tool_requested',
     toolRequests: toolCalls.map((toolCall) => ({
       toolCallId: toolCall.id,
-      toolName: toolCall.function.name,
-      argumentsJson: toolCall.function.arguments,
+      toolName: toolCall.name,
+      argumentsJson: toolCall.argumentsJson,
     })),
   };
 }
 
-function createToolStartedEvent(
-  toolCall: ChatCompletionMessageFunctionToolCall,
-): AgentEvent {
+function createToolStartedEvent(toolCall: AgentModelToolCall): AgentEvent {
   return {
     type: 'tool_started',
     toolCallId: toolCall.id,
-    toolName: toolCall.function.name,
-    argumentsJson: toolCall.function.arguments,
+    toolName: toolCall.name,
+    argumentsJson: toolCall.argumentsJson,
   };
 }
 
@@ -55,14 +50,14 @@ function createToolFinishedEvent(execution: AgentToolExecution): AgentEvent {
 }
 
 function createPermissionRequest(
-  toolCall: ChatCompletionMessageFunctionToolCall,
+  toolCall: AgentModelToolCall,
   toolDefinition: AgentToolDefinition,
   context: AgentRunContext,
 ): AgentPermissionRequest {
   return {
     toolCallId: toolCall.id,
     toolName: toolDefinition.name,
-    argumentsJson: toolCall.function.arguments,
+    argumentsJson: toolCall.argumentsJson,
     annotations: toolDefinition.annotations,
     approvalPolicy: context.policy.approvalPolicy,
     sandboxMode: context.policy.sandboxMode,
@@ -115,7 +110,7 @@ function assertToolPermissionCanContinue(
 }
 
 export function executeAgentToolCalls(
-  toolCalls: ChatCompletionMessageFunctionToolCall[],
+  toolCalls: AgentModelToolCall[],
   context: AgentRunContext,
   callbacks: AgentToolRuntimeCallbacks = {},
 ): AgentToolExecution[] {
@@ -127,7 +122,7 @@ export function executeAgentToolCalls(
   for (const toolCall of toolCalls) {
     assertAgentRunNotAborted(context);
 
-    const toolDefinition = readAgentToolDefinition(toolCall.function.name);
+    const toolDefinition = readAgentToolDefinition(toolCall.name);
     const permissionRequest = createPermissionRequest(
       toolCall,
       toolDefinition,
@@ -148,7 +143,7 @@ export function executeAgentToolCalls(
     assertAgentRunNotAborted(context);
     callbacks.onEvent?.(createToolStartedEvent(toolCall));
 
-    const toolResult = toolDefinition.execute(toolCall.function.arguments);
+    const toolResult = toolDefinition.execute(toolCall.argumentsJson);
     const toolExecution: AgentToolExecution = {
       toolCallId: toolCall.id,
       toolName: toolDefinition.name,

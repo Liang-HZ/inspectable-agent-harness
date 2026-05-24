@@ -1,6 +1,6 @@
-import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import * as z from 'zod';
 
+import type { AgentModelToolDefinition } from './agent-model-types';
 import type { AgentToolAnnotations } from './agent-permissions';
 
 const INSPECT_TEXT_TOOL_NAME = 'inspect_text';
@@ -26,7 +26,7 @@ export type AgentToolResult = {
 export type AgentToolDefinition = {
   name: string;
   annotations: AgentToolAnnotations;
-  chatCompletionTool: ChatCompletionTool;
+  modelTool: AgentModelToolDefinition;
   execute: (argumentsJson: string) => AgentToolResult;
 };
 
@@ -45,25 +45,22 @@ const inspectTextToolDefinition = {
     openWorld: false,
     idempotent: true,
   },
-  chatCompletionTool: {
-    type: 'function',
-    function: {
-      name: INSPECT_TEXT_TOOL_NAME,
-      description:
-        'Inspect plain text and return character, line, and word counts. Use this when the user asks about length, counts, or basic text statistics.',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          text: {
-            type: 'string',
-            description: 'The exact text to inspect.',
-          },
+  modelTool: {
+    name: INSPECT_TEXT_TOOL_NAME,
+    description:
+      'Inspect plain text and return character, line, and word counts. Use this when the user asks about length, counts, or basic text statistics.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The exact text to inspect.',
         },
-        required: ['text'],
       },
-      strict: true,
+      required: ['text'],
     },
+    strict: true,
   },
   execute: (argumentsJson: string): AgentToolResult => {
     const input = parseInspectTextInput(argumentsJson);
@@ -86,8 +83,8 @@ export const agentToolRegistry = new Map<string, AgentToolDefinition>(
   ]),
 );
 
-export const agentTools: ChatCompletionTool[] = agentToolDefinitions.map(
-  (toolDefinition) => toolDefinition.chatCompletionTool,
+export const agentTools: AgentModelToolDefinition[] = agentToolDefinitions.map(
+  (toolDefinition) => toolDefinition.modelTool,
 );
 
 function countWords(text: string): number {

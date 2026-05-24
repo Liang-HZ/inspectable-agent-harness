@@ -1,5 +1,7 @@
 import * as z from 'zod';
 
+import { AGENT_MODEL_STAGES } from './agent-model-stages';
+
 export type AgentRequestBody = {
   task: string;
   goal: string | undefined;
@@ -17,11 +19,37 @@ export const agentStepSchema = z.strictObject({
 
 export type AgentStep = z.infer<typeof agentStepSchema>;
 
+export const agentTokenUsageSchema = z.strictObject({
+  inputTokens: z.number(),
+  cachedInputTokens: z.number(),
+  outputTokens: z.number(),
+  reasoningOutputTokens: z.number(),
+  totalTokens: z.number(),
+});
+
+export type AgentTokenUsage = z.infer<typeof agentTokenUsageSchema>;
+
+export const agentModelCallUsageSchema = z.strictObject({
+  stage: z.enum(AGENT_MODEL_STAGES),
+  tokenUsage: agentTokenUsageSchema.nullable(),
+  rawUsage: z.unknown(),
+});
+
+export type AgentModelCallUsage = z.infer<typeof agentModelCallUsageSchema>;
+
+export const agentUsageSchema = z.strictObject({
+  totalTokenUsage: agentTokenUsageSchema,
+  lastTokenUsage: agentTokenUsageSchema.nullable(),
+  calls: z.array(agentModelCallUsageSchema),
+});
+
+export type AgentUsage = z.infer<typeof agentUsageSchema>;
+
 export const agentResultSchema = z.strictObject({
   model: z.string(),
   answer: z.string(),
   steps: z.array(agentStepSchema),
-  usage: z.unknown(),
+  usage: agentUsageSchema,
 });
 
 export type AgentResult = z.infer<typeof agentResultSchema>;
