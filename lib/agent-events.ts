@@ -1,9 +1,14 @@
 import type { AgentResult, AgentStep } from './agent-api-types';
+import type {
+  AgentPermissionDecision,
+  AgentPermissionRequest,
+} from './agent-permissions';
 
 export type AgentRunStatus =
   | 'running'
   | 'waiting_for_model'
   | 'running_tool'
+  | 'waiting_for_approval'
   | 'streaming_answer'
   | 'succeeded'
   | 'failed'
@@ -50,6 +55,16 @@ export type AgentEvent =
       toolName: string;
       input: unknown;
       result: unknown;
+    }
+  | {
+      type: 'tool_permission_decided';
+      request: AgentPermissionRequest;
+      decision: AgentPermissionDecision;
+    }
+  | {
+      type: 'approval_requested';
+      request: AgentPermissionRequest;
+      decision: AgentPermissionDecision;
     }
   | {
       type: 'run_succeeded';
@@ -150,6 +165,22 @@ export function applyAgentEvent(
     return {
       ...state,
       status: 'running_tool',
+      events: events,
+    };
+  }
+
+  if (event.type === 'tool_permission_decided') {
+    return {
+      ...state,
+      status: 'running_tool',
+      events: events,
+    };
+  }
+
+  if (event.type === 'approval_requested') {
+    return {
+      ...state,
+      status: 'waiting_for_approval',
       events: events,
     };
   }

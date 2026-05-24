@@ -32,6 +32,8 @@ export function projectAgentEventToStreamEvent(
     case 'run_started':
     case 'model_started':
     case 'tool_requested':
+    case 'tool_permission_decided':
+    case 'approval_requested':
     case 'tool_started':
     case 'tool_finished':
     case 'run_cancelled':

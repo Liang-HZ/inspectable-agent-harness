@@ -75,11 +75,12 @@ lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
 lib/agent-input.ts                  Zod agent request body parsing and validation
+lib/agent-permissions.ts            Approval policy, sandbox mode, and permission decisions
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
 lib/agent-events.ts                 Agent runtime event and run state types
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
-lib/agent-tools.ts                  Local agent tool definitions and concrete handlers
+lib/agent-tools.ts                  Local agent tool registry and concrete handlers
 lib/model-gateway.ts                Model provider call boundary for agent runs
 lib/agent.ts                        Tool-using agent orchestration service
 ```
@@ -174,10 +175,16 @@ than directly create SDK clients or pass SDK request options.
 
 `lib/agent-run-context.ts` owns per-run lifecycle context.
 
-It currently contains `runId` and `AbortSignal` plus the shared cancellation
-check. Future runtime-level concerns such as trace sinks, checkpoints, retry
-budgets, and approval wait state should attach to this boundary instead of
-being passed as unrelated optional parameters.
+It currently contains `runId`, `AbortSignal`, and `AgentRunPolicy` plus the
+shared cancellation check. Future runtime-level concerns such as trace sinks,
+checkpoints, retry budgets, and approval wait state should attach to this
+boundary instead of being passed as unrelated optional parameters.
+
+`lib/agent-permissions.ts` owns the approval decision model.
+
+It defines tool annotations, approval policy, sandbox mode, permission requests,
+and permission decisions. It does not execute tools and does not enforce OS-level
+sandboxing.
 
 `lib/agent-events.ts` owns the first internal agent harness event contract.
 
@@ -199,6 +206,11 @@ events to the current browser stream contract:
 Tool lifecycle events currently stay server-side only. They are logged as
 runtime events but are not exposed to the existing React UI.
 
+Permission events currently stay server-side only. `tool_permission_decided`
+records each runtime permission decision. `approval_requested` records that a
+tool call needs user approval, but interactive approval resume is not
+implemented yet.
+
 For `model_started`, the `stage` field describes why the model call is starting.
 `tool_or_answer_selection` means the agent is asking the model to choose whether
 to answer directly or request a tool. `answer_generation` means the agent is
@@ -218,16 +230,19 @@ provider adapters for Anthropic or other non-OpenAI message formats.
 
 `lib/agent-tool-runtime.ts` owns the tool execution lifecycle.
 
-It receives model tool calls, checks run cancellation, emits tool runtime
-events, delegates to concrete tool handlers, and returns tool execution results.
+It receives model tool calls, checks run cancellation, looks up tools by name in
+the registry, asks the permission runtime for a decision, emits tool runtime
+events, executes concrete tool handlers, and returns tool execution results.
 This keeps `lib/agent.ts` focused on orchestration instead of tool lifecycle
-details. The first version is intentionally small; later versions can add tool
-timeouts, retries, permission checks, and output validation at this boundary.
+details. Later versions can add tool timeouts, retries, interactive approval
+resume, and output validation at this boundary.
 
-`lib/agent-tools.ts` owns concrete local agent tools.
+`lib/agent-tools.ts` owns the local tool registry and concrete local agent
+tools.
 
-It exposes Chat Completions tool definitions and executes validated local tool
-calls. The first tool is `inspect_text`, which returns basic text statistics.
+Each tool definition groups the tool name, the Chat Completions tool definition,
+tool annotations, argument parsing, and the concrete handler. The first
+registered tool is `inspect_text`, which returns basic text statistics.
 
 `lib/agent-log.ts` owns structured server logs for `/api/agent`.
 
@@ -251,11 +266,12 @@ app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-types.ts              Shared API request/response types
 lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
 lib/agent-input.ts                  Zod request body parsing and validation
+lib/agent-permissions.ts            Approval and sandbox policy decisions
 lib/agent-run-context.ts            Per-run lifecycle context and cancellation
 lib/agent-events.ts                 Internal runtime events and derived run state
 lib/agent-log.ts                    Structured server log helpers
 lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
-lib/agent-tools.ts                  Concrete local tool definitions and handlers
+lib/agent-tools.ts                  Concrete local tool registry and handlers
 lib/model-gateway.ts                Model provider boundary for agent runtime
 lib/agent.ts                        Agent orchestration service
 ```
@@ -376,21 +392,163 @@ Typing a new "stop" instruction into the model is not a true cancellation of the
 in-flight request. It is just another future request. The real interruption path
 is aborting the current HTTP/model request.
 
+## Permission And Sandbox Design
+
+The permission model follows the Codex-style separation between tool facts,
+approval policy, and sandbox boundaries.
+
+```text
+Tool annotations     What the tool says about its behavior
+Approval policy      Whether this run should auto-allow, ask, or deny
+Sandbox mode         What the execution environment can actually touch
+Hooks / guardian     Future dynamic policy layers
+User approval        Future interactive final decision
+```
+
+These layers must stay separate. A tool does not decide whether it may run. A
+tool only declares behavior hints. The runtime decides whether the current call
+is allowed under the current run policy. The sandbox, once implemented, enforces
+hard execution boundaries even after approval.
+
+Tool annotations are multi-dimensional facts, not a single risk level:
+
+```ts
+type AgentToolAnnotations = {
+  readOnly?: boolean;
+  destructive?: boolean;
+  openWorld?: boolean;
+  idempotent?: boolean;
+};
+```
+
+`undefined` means unknown, not false. Unknown hints are treated conservatively.
+The current `inspect_text` tool declares:
+
+```text
+readOnly=true
+destructive=false
+openWorld=false
+idempotent=true
+```
+
+Approval policy is run-level configuration:
+
+```text
+strict      Only known-safe tools are auto-approved.
+on_request  Default. Known-safe tools are auto-approved; unknown/risky tools ask.
+never       Never ask for interactive approval. This is not the same as sandbox bypass.
+```
+
+Sandbox mode is also run-level configuration:
+
+```text
+read_only
+workspace_write
+danger_full_access
+```
+
+Current implementation status:
+
+- `AgentRunPolicy` exists on `AgentRunContext`.
+- The default is `approvalPolicy=on_request` and `sandboxMode=read_only`.
+- `AgentToolRuntime` creates an `AgentPermissionRequest` before executing a
+  tool.
+- `decideAgentToolPermission(...)` currently uses approval policy plus tool
+  annotations.
+- Known-safe tools are allowed.
+- Unknown, destructive, or open-world tools ask for approval.
+- Interactive approval resume is not implemented yet, so an `ask` decision emits
+  `approval_requested` and then raises `AgentApprovalRequiredError` as a
+  fail-closed placeholder.
+- Sandbox mode is declared but not enforced yet.
+
+`danger_full_access` belongs to sandbox mode, not to individual tools. It should
+be selected by the user, app, or run configuration. It must not be inferred from
+the model or from a tool call.
+
+Future decision order should be:
+
+```text
+tool-level/user config override
+  -> hook/rule engine
+  -> global approval policy + tool annotations
+  -> guardian/classifier if added
+  -> user approval if interactive
+  -> sandbox enforcement at execution time
+```
+
+Every decision should remain auditable through event logs. Current decisions use
+`tool_permission_decided`; future interactive pauses use `approval_requested`.
+`AgentApprovalRequiredError` is not the final approval design. It only marks the
+current unsupported pause point until the runtime has session storage, approval
+responses, and resume support.
+
+### Approval Pause Semantics
+
+`tool_permission_decided` and `approval_requested` are intentionally separate.
+
+`tool_permission_decided` is an audit event. It records the decision made by the
+permission runtime:
+
+```text
+allow  The tool call may continue.
+ask    The tool call needs approval before execution.
+deny   The tool call is rejected by policy.
+```
+
+This event does not by itself move the run into a waiting state. It records what
+the policy decided.
+
+`approval_requested` is a workflow event. It means the run has reached a point
+where tool execution cannot continue without an external approval response. This
+event moves `AgentRunState.status` to `waiting_for_approval`.
+
+The current runtime does not yet have a durable run store, an approval response
+API, or resume support. Because of that, an `ask` decision follows this
+fail-closed sequence:
+
+```text
+tool_permission_decided(ask)
+approval_requested
+throw AgentApprovalRequiredError
+```
+
+This is a temporary bridge, not the final architecture. The error is explicit so
+callers can distinguish "approval is required but unsupported" from ordinary tool
+failure or policy denial.
+
+The final approval flow should replace this throw with a pause/resume protocol:
+
+```text
+tool_permission_decided(ask)
+approval_requested
+persist run state and pending tool call
+return or stream waiting_for_approval to the client
+client/user approves or denies
+resume the same run from the pending tool call
+```
+
+`AgentPermissionDeniedError` is different. A `deny` decision is terminal for the
+current tool call and may fail the run immediately unless a future policy layer
+chooses to feed the denial back to the model as a recoverable tool result.
+
 The next agent boundary can add these modules when the runtime needs them:
 
 ```text
-lib/agent-permissions.ts            Approval policies and user review requests
 lib/agent-session-store.ts          Append-only event log and resumable runs
 lib/tools/*.ts                      Larger tool families
 ```
 
-`lib/agent-tool-runtime.ts` now exists as the first tool lifecycle boundary. The
-next expansion of this module should add a registry shape before the project
-adds more local tools:
+`lib/agent-tool-runtime.ts` now exists as the first tool lifecycle boundary.
+`lib/agent-tools.ts` now contains the local tool registry:
 
 ```text
-tool name -> input schema -> handler -> output schema -> execution policy
+tool name -> annotations -> input schema -> handler -> output schema
 ```
+
+The current registry includes the name, annotations, input parsing, and handler.
+Output schema is the next part to add when the tool boundary needs stricter
+contracts.
 
 ## Agent Harness Direction
 
@@ -421,6 +579,8 @@ The current implementation is intentionally small:
 - `AgentRunState` is derived from events.
 - `AgentToolRuntime` wraps concrete tool execution and emits tool lifecycle
   events.
+- `AgentPermissions` makes annotation-based approval decisions before tool
+  execution.
 - `AgentStreamProjection` maps runtime events to the current frontend SSE
   contract.
 - Existing `AgentStep` objects remain the frontend display contract.
@@ -428,9 +588,9 @@ The current implementation is intentionally small:
 
 Future work should grow the harness in this order:
 
-1. add a real tool registry shape inside `AgentToolRuntime`
-2. add permission and user-input events
-3. persist the event log so a run can be inspected, retried, or resumed
+1. add interactive approval resume and user-input events
+2. persist the event log so a run can be inspected, retried, or resumed
+3. enforce sandbox mode for file, shell, network, or external API tools
 4. add provider-neutral model message contracts after the runtime loop is stable
 
 ## Maintenance Rule

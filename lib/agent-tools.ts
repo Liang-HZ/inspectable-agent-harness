@@ -1,8 +1,7 @@
-import type {
-  ChatCompletionMessageFunctionToolCall,
-  ChatCompletionTool,
-} from 'openai/resources/chat/completions';
+import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import * as z from 'zod';
+
+import type { AgentToolAnnotations } from './agent-permissions';
 
 const INSPECT_TEXT_TOOL_NAME = 'inspect_text';
 
@@ -19,15 +18,34 @@ type InspectTextResult = {
   preview: string;
 };
 
-export type AgentToolExecution = {
-  toolCallId: string;
-  toolName: typeof INSPECT_TEXT_TOOL_NAME;
-  input: InspectTextInput;
-  result: InspectTextResult;
+export type AgentToolResult = {
+  input: unknown;
+  result: unknown;
 };
 
-export const agentTools: ChatCompletionTool[] = [
-  {
+export type AgentToolDefinition = {
+  name: string;
+  annotations: AgentToolAnnotations;
+  chatCompletionTool: ChatCompletionTool;
+  execute: (argumentsJson: string) => AgentToolResult;
+};
+
+export type AgentToolExecution = {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  result: unknown;
+};
+
+const inspectTextToolDefinition = {
+  name: INSPECT_TEXT_TOOL_NAME,
+  annotations: {
+    readOnly: true,
+    destructive: false,
+    openWorld: false,
+    idempotent: true,
+  },
+  chatCompletionTool: {
     type: 'function',
     function: {
       name: INSPECT_TEXT_TOOL_NAME,
@@ -47,7 +65,30 @@ export const agentTools: ChatCompletionTool[] = [
       strict: true,
     },
   },
+  execute: (argumentsJson: string): AgentToolResult => {
+    const input = parseInspectTextInput(argumentsJson);
+
+    return {
+      input: input,
+      result: inspectText(input),
+    };
+  },
+} satisfies AgentToolDefinition;
+
+export const agentToolDefinitions: AgentToolDefinition[] = [
+  inspectTextToolDefinition,
 ];
+
+export const agentToolRegistry = new Map<string, AgentToolDefinition>(
+  agentToolDefinitions.map((toolDefinition) => [
+    toolDefinition.name,
+    toolDefinition,
+  ]),
+);
+
+export const agentTools: ChatCompletionTool[] = agentToolDefinitions.map(
+  (toolDefinition) => toolDefinition.chatCompletionTool,
+);
 
 function countWords(text: string): number {
   const matches = text.trim().match(/\S+/g);
@@ -72,21 +113,4 @@ function parseInspectTextInput(argumentsJson: string): InspectTextInput {
   }
 
   return parsedInput.data;
-}
-
-export function executeAgentTool(
-  toolCall: ChatCompletionMessageFunctionToolCall,
-): AgentToolExecution {
-  if (toolCall.function.name !== INSPECT_TEXT_TOOL_NAME) {
-    throw new Error(`Unknown agent tool: ${toolCall.function.name}`);
-  }
-
-  const input = parseInspectTextInput(toolCall.function.arguments);
-
-  return {
-    toolCallId: toolCall.id,
-    toolName: INSPECT_TEXT_TOOL_NAME,
-    input: input,
-    result: inspectText(input),
-  };
 }
