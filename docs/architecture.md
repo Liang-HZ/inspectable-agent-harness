@@ -38,6 +38,7 @@ flowchart TD
   AgentStreamRoute --> Env
   AgentRoute --> AgentService[lib/agent.ts]
   AgentStreamRoute --> AgentService
+  AgentStreamRoute --> AgentProjection[lib/agent-stream-projection.ts]
   AgentService --> AgentRunContext[lib/agent-run-context.ts]
   AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
@@ -72,6 +73,7 @@ app/api/agent/route.ts              HTTP entry point for /api/agent
 app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
+lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
 lib/agent-input.ts                  Zod agent request body parsing and validation
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
 lib/agent-events.ts                 Agent runtime event and run state types
@@ -180,11 +182,22 @@ being passed as unrelated optional parameters.
 `lib/agent-events.ts` owns the first internal agent harness event contract.
 
 `AgentEvent` is the runtime truth for what happened during a run. `AgentStep`
-is still the current frontend-friendly display projection. The streaming route
-continues to send `step` and `answerDelta` events today, but `lib/agent.ts`
-records internal events such as `run_started`, `model_started`, `model_delta`,
+is still the current frontend-friendly display projection. `lib/agent.ts`
+emits internal events such as `run_started`, `model_started`, `model_delta`,
 `tool_requested`, `tool_started`, `tool_finished`, `step_created`, and
-`run_succeeded`.
+`run_succeeded`. The streaming route sends frontend SSE events by projecting
+these runtime events through `lib/agent-stream-projection.ts`.
+
+`lib/agent-stream-projection.ts` owns the compatibility layer from runtime
+events to the current browser stream contract:
+
+- `step_created` becomes `step`
+- `model_delta` becomes `answerDelta`
+- `run_succeeded` becomes `done`
+- `run_failed` becomes `error`
+
+Tool lifecycle events currently stay server-side only. They are logged as
+runtime events but are not exposed to the existing React UI.
 
 For `model_started`, the `stage` field describes why the model call is starting.
 `tool_or_answer_selection` means the agent is asking the model to choose whether
@@ -236,6 +249,7 @@ The first agent endpoint uses the same layered shape:
 app/api/agent/route.ts              HTTP entry point for /api/agent
 app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-types.ts              Shared API request/response types
+lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
 lib/agent-input.ts                  Zod request body parsing and validation
 lib/agent-run-context.ts            Per-run lifecycle context and cancellation
 lib/agent-events.ts                 Internal runtime events and derived run state
@@ -282,6 +296,7 @@ sequenceDiagram
   participant UI as components/chat-playground.tsx
   participant Client as lib/agent-api-client.ts
   participant Route as app/api/agent/stream/route.ts
+  participant Projection as lib/agent-stream-projection.ts
   participant Agent as lib/agent.ts
   participant Context as lib/agent-run-context.ts
   participant Gateway as lib/model-gateway.ts
@@ -294,9 +309,10 @@ sequenceDiagram
   UI->>UI: dispatch(agentSubmitStarted)
   UI->>Client: requestAgentRunStream(body, callbacks, signal)
   Client->>Route: POST /api/agent/stream with fetch signal
-  Route->>Agent: runAgentStream(input, config, signal, callbacks)
+  Route->>Agent: runAgentStream(input, config, signal, onEvent)
   Agent->>Context: create run context
-  Agent-->>Route: onStep(Build prompt)
+  Agent-->>Route: AgentEvent step_created
+  Route->>Projection: projectAgentEventToStreamEvent(event)
   Route-->>Client: SSE step
   Client-->>UI: onStep(event)
   UI->>UI: dispatch(agentStepReceived)
@@ -307,7 +323,8 @@ sequenceDiagram
     ToolRuntime->>Tools: execute concrete tool handler
     Tools-->>ToolRuntime: tool result
     ToolRuntime-->>Agent: tool executions
-    Agent-->>Route: onStep(Run local tool)
+    Agent-->>Route: AgentEvent step_created
+    Route->>Projection: projectAgentEventToStreamEvent(event)
     Route-->>Client: SSE step
     Client-->>UI: onStep(event)
     UI->>UI: dispatch(agentStepReceived)
@@ -318,13 +335,16 @@ sequenceDiagram
   loop Model answer chunks
     Model-->>Gateway: delta
     Gateway-->>Agent: guarded delta
-    Agent-->>Route: onAnswerDelta(delta)
+    Agent-->>Route: AgentEvent model_delta
+    Route->>Projection: projectAgentEventToStreamEvent(event)
     Route-->>Client: SSE answerDelta
     Client-->>UI: onAnswerDelta(event)
     UI->>UI: dispatch(agentAnswerDeltaReceived)
   end
-  Agent-->>Route: AgentResult
+  Agent-->>Route: AgentEvent run_succeeded
+  Route->>Projection: projectAgentEventToStreamEvent(event)
   Route-->>Client: SSE done
+  Agent-->>Route: AgentResult
   Client-->>UI: onDone(event)
   UI->>UI: dispatch(agentSubmitFinished)
 ```
@@ -401,16 +421,17 @@ The current implementation is intentionally small:
 - `AgentRunState` is derived from events.
 - `AgentToolRuntime` wraps concrete tool execution and emits tool lifecycle
   events.
+- `AgentStreamProjection` maps runtime events to the current frontend SSE
+  contract.
 - Existing `AgentStep` objects remain the frontend display contract.
 - Existing SSE events remain compatible with the current React UI.
 
 Future work should grow the harness in this order:
 
-1. make the stream route project from `AgentEvent` instead of direct callbacks
-2. add a real tool registry shape inside `AgentToolRuntime`
-3. add permission and user-input events
-4. persist the event log so a run can be inspected, retried, or resumed
-5. add provider-neutral model message contracts after the runtime loop is stable
+1. add a real tool registry shape inside `AgentToolRuntime`
+2. add permission and user-input events
+3. persist the event log so a run can be inspected, retried, or resumed
+4. add provider-neutral model message contracts after the runtime loop is stable
 
 ## Maintenance Rule
 

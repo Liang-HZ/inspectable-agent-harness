@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 
 import { runAgentStream } from '../../../../lib/agent';
 import type { AgentStreamEvent } from '../../../../lib/agent-api-types';
+import { projectAgentEventToStreamEvent } from '../../../../lib/agent-stream-projection';
 import {
   logAgentError,
   logAgentInfo,
@@ -88,21 +89,14 @@ export async function POST(request: NextRequest) {
             signal: request.signal,
           },
           {
-            onStep: (step) => {
-              controller.enqueue(
-                encodeAgentStreamEvent({
-                  type: 'step',
-                  step: step,
-                }),
-              );
-            },
-            onAnswerDelta: (delta) => {
-              controller.enqueue(
-                encodeAgentStreamEvent({
-                  type: 'answerDelta',
-                  delta: delta,
-                }),
-              );
+            onEvent: (event) => {
+              const streamEvent = projectAgentEventToStreamEvent(event);
+
+              if (streamEvent === undefined) {
+                return;
+              }
+
+              controller.enqueue(encodeAgentStreamEvent(streamEvent));
             },
           },
         );
@@ -114,13 +108,6 @@ export async function POST(request: NextRequest) {
           answerLength: result.answer.length,
           result: result,
         });
-
-        controller.enqueue(
-          encodeAgentStreamEvent({
-            type: 'done',
-            result: result,
-          }),
-        );
       } catch (error) {
         if (request.signal.aborted || isAbortLikeError(error)) {
           logAgentInfo(runId, 'stream_request_aborted');

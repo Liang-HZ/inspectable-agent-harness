@@ -28,9 +28,7 @@ import {
 } from './model-gateway';
 
 type RunAgentStreamCallbacks = {
-  onStep: (step: AgentStep) => void;
-  onAnswerDelta: (delta: string) => void;
-  onEvent?: (event: AgentEvent) => void;
+  onEvent: (event: AgentEvent) => void;
 };
 
 const AGENT_SYSTEM_MESSAGE =
@@ -148,7 +146,6 @@ async function streamFinalAnswer(
   modelGateway: AgentModelGateway,
   input: AgentInput,
   messages: ChatCompletionMessageParam[],
-  callbacks: RunAgentStreamCallbacks,
   emitAgentEvent: (event: AgentEvent) => void,
 ): Promise<{
   model: string;
@@ -181,7 +178,6 @@ async function streamFinalAnswer(
       type: 'model_delta',
       delta: delta,
     });
-    callbacks.onAnswerDelta(delta);
   }
 
   if (answer.trim() === '') {
@@ -340,7 +336,7 @@ export async function runAgentStream(
 
   function emitAgentEvent(event: AgentEvent): void {
     runState = applyAgentEvent(runState, event);
-    callbacks.onEvent?.(event);
+    callbacks.onEvent(event);
     logAgentEvent(context.runId, event);
   }
 
@@ -356,7 +352,6 @@ export async function runAgentStream(
     type: 'step_created',
     step: promptStep,
   });
-  callbacks.onStep(promptStep);
   logAgentStep(context.runId, promptStep);
   logAgentInfo(context.runId, 'prompt_built', {
     prompt: prompt,
@@ -396,7 +391,6 @@ export async function runAgentStream(
       modelGateway,
       input,
       baseMessages,
-      callbacks,
       emitAgentEvent,
     );
     const finalStep = createFinalAnswerStep(
@@ -411,7 +405,6 @@ export async function runAgentStream(
       type: 'step_created',
       step: finalStep,
     });
-    callbacks.onStep(finalStep);
     logAgentStep(context.runId, finalStep);
 
     const result = {
@@ -445,7 +438,6 @@ export async function runAgentStream(
     type: 'step_created',
     step: toolStep,
   });
-  callbacks.onStep(toolStep);
   logAgentStep(context.runId, toolStep);
 
   const toolMessages: ChatCompletionMessageParam[] = toolExecutions.map(
@@ -463,7 +455,6 @@ export async function runAgentStream(
       buildAssistantToolCallMessage(decisionMessage),
       ...toolMessages,
     ],
-    callbacks,
     emitAgentEvent,
   );
   const finalStep = createFinalAnswerStep(
@@ -478,7 +469,6 @@ export async function runAgentStream(
     type: 'step_created',
     step: finalStep,
   });
-  callbacks.onStep(finalStep);
   logAgentStep(context.runId, finalStep);
   logAgentInfo(context.runId, 'model_answer_received', {
     answer: finalAnswer.answer,
