@@ -41,7 +41,8 @@ flowchart TD
   AgentService --> AgentRunContext[lib/agent-run-context.ts]
   AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
-  AgentService --> AgentTools[lib/agent-tools.ts]
+  AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
+  ToolRuntime --> AgentTools[lib/agent-tools.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   ModelGateway --> OpenAIClient
@@ -75,7 +76,8 @@ lib/agent-input.ts                  Zod agent request body parsing and validatio
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
 lib/agent-events.ts                 Agent runtime event and run state types
 lib/agent-log.ts                    Structured server log helpers for agent runs
-lib/agent-tools.ts                  Local agent tool definitions and execution
+lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
+lib/agent-tools.ts                  Local agent tool definitions and concrete handlers
 lib/model-gateway.ts                Model provider call boundary for agent runs
 lib/agent.ts                        Tool-using agent orchestration service
 ```
@@ -181,7 +183,8 @@ being passed as unrelated optional parameters.
 is still the current frontend-friendly display projection. The streaming route
 continues to send `step` and `answerDelta` events today, but `lib/agent.ts`
 records internal events such as `run_started`, `model_started`, `model_delta`,
-`tool_requested`, `step_created`, and `run_succeeded`.
+`tool_requested`, `tool_started`, `tool_finished`, `step_created`, and
+`run_succeeded`.
 
 For `model_started`, the `stage` field describes why the model call is starting.
 `tool_or_answer_selection` means the agent is asking the model to choose whether
@@ -200,7 +203,15 @@ forwards the agent run `AbortSignal`, and exposes narrow `createChatCompletion`
 and `streamChatCompletion` methods. This module is the first place to add
 provider adapters for Anthropic or other non-OpenAI message formats.
 
-`lib/agent-tools.ts` owns local agent tools.
+`lib/agent-tool-runtime.ts` owns the tool execution lifecycle.
+
+It receives model tool calls, checks run cancellation, emits tool runtime
+events, delegates to concrete tool handlers, and returns tool execution results.
+This keeps `lib/agent.ts` focused on orchestration instead of tool lifecycle
+details. The first version is intentionally small; later versions can add tool
+timeouts, retries, permission checks, and output validation at this boundary.
+
+`lib/agent-tools.ts` owns concrete local agent tools.
 
 It exposes Chat Completions tool definitions and executes validated local tool
 calls. The first tool is `inspect_text`, which returns basic text statistics.
@@ -229,7 +240,8 @@ lib/agent-input.ts                  Zod request body parsing and validation
 lib/agent-run-context.ts            Per-run lifecycle context and cancellation
 lib/agent-events.ts                 Internal runtime events and derived run state
 lib/agent-log.ts                    Structured server log helpers
-lib/agent-tools.ts                  Local tool definitions and execution
+lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
+lib/agent-tools.ts                  Concrete local tool definitions and handlers
 lib/model-gateway.ts                Model provider boundary for agent runtime
 lib/agent.ts                        Agent orchestration service
 ```
@@ -246,11 +258,13 @@ flowchart TD
   AgentService --> RunContext[lib/agent-run-context.ts]
   AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
+  AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   AgentService --> DecisionCall[Model decision call]
   ModelGateway --> DecisionCall
   DecisionCall --> DirectAnswer[Direct answer]
   DecisionCall --> ToolCall[Tool call request]
-  ToolCall --> AgentTools[lib/agent-tools.ts]
+  ToolCall --> ToolRuntime
+  ToolRuntime --> AgentTools[lib/agent-tools.ts]
   AgentTools --> FinalCall[Final model call with tool result]
   ModelGateway --> FinalCall
   DirectAnswer --> AgentResponse[Final answer plus steps]
@@ -271,6 +285,7 @@ sequenceDiagram
   participant Agent as lib/agent.ts
   participant Context as lib/agent-run-context.ts
   participant Gateway as lib/model-gateway.ts
+  participant ToolRuntime as lib/agent-tool-runtime.ts
   participant Tools as lib/agent-tools.ts
   participant Model as OpenAI-compatible API
 
@@ -288,8 +303,10 @@ sequenceDiagram
   Agent->>Gateway: Decision call with tools
   Gateway->>Model: Chat completion with signal
   alt Model requests inspect_text
-    Agent->>Tools: executeAgentTool(toolCall)
-    Tools-->>Agent: tool result
+    Agent->>ToolRuntime: executeAgentToolCalls(toolCalls)
+    ToolRuntime->>Tools: execute concrete tool handler
+    Tools-->>ToolRuntime: tool result
+    ToolRuntime-->>Agent: tool executions
     Agent-->>Route: onStep(Run local tool)
     Route-->>Client: SSE step
     Client-->>UI: onStep(event)
@@ -343,9 +360,16 @@ The next agent boundary can add these modules when the runtime needs them:
 
 ```text
 lib/agent-permissions.ts            Approval policies and user review requests
-lib/agent-tool-runtime.ts           Tool registry, validation, timeout, cancellation
 lib/agent-session-store.ts          Append-only event log and resumable runs
 lib/tools/*.ts                      Larger tool families
+```
+
+`lib/agent-tool-runtime.ts` now exists as the first tool lifecycle boundary. The
+next expansion of this module should add a registry shape before the project
+adds more local tools:
+
+```text
+tool name -> input schema -> handler -> output schema -> execution policy
 ```
 
 ## Agent Harness Direction
@@ -375,13 +399,15 @@ The current implementation is intentionally small:
 
 - `AgentEvent` is the internal runtime event contract.
 - `AgentRunState` is derived from events.
+- `AgentToolRuntime` wraps concrete tool execution and emits tool lifecycle
+  events.
 - Existing `AgentStep` objects remain the frontend display contract.
 - Existing SSE events remain compatible with the current React UI.
 
 Future work should grow the harness in this order:
 
 1. make the stream route project from `AgentEvent` instead of direct callbacks
-2. move tool execution behind a `ToolRuntime`
+2. add a real tool registry shape inside `AgentToolRuntime`
 3. add permission and user-input events
 4. persist the event log so a run can be inspected, retried, or resumed
 5. add provider-neutral model message contracts after the runtime loop is stable

@@ -39,6 +39,19 @@ export type AgentEvent =
       toolRequests: AgentToolRequestEvent[];
     }
   | {
+      type: 'tool_started';
+      toolCallId: string;
+      toolName: string;
+      argumentsJson: string;
+    }
+  | {
+      type: 'tool_finished';
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      result: unknown;
+    }
+  | {
       type: 'run_succeeded';
       result: AgentResult;
     }
@@ -118,6 +131,22 @@ export function applyAgentEvent(
   }
 
   if (event.type === 'tool_requested') {
+    return {
+      ...state,
+      status: 'running_tool',
+      events: events,
+    };
+  }
+
+  if (event.type === 'tool_started') {
+    return {
+      ...state,
+      status: 'running_tool',
+      events: events,
+    };
+  }
+
+  if (event.type === 'tool_finished') {
     return {
       ...state,
       status: 'running_tool',

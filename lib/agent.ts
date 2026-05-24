@@ -18,7 +18,8 @@ import {
   type AgentRunContextInput,
 } from './agent-run-context';
 import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
-import { agentTools, executeAgentTool } from './agent-tools';
+import { executeAgentToolCalls } from './agent-tool-runtime';
+import { agentTools } from './agent-tools';
 import type { AgentToolExecution } from './agent-tools';
 import type { ModelConfig } from './env';
 import {
@@ -268,11 +269,7 @@ export async function runAgent(
     };
   }
 
-  assertAgentRunNotAborted(context);
-  const toolExecutions = functionToolCalls.map(
-    (toolCall): AgentToolExecution => executeAgentTool(toolCall),
-  );
-  assertAgentRunNotAborted(context);
+  const toolExecutions = executeAgentToolCalls(functionToolCalls, context);
   const toolStep = createToolStep(
     functionToolCalls,
     toolExecutions,
@@ -435,19 +432,9 @@ export async function runAgentStream(
     return result;
   }
 
-  assertAgentRunNotAborted(context);
-  emitAgentEvent({
-    type: 'tool_requested',
-    toolRequests: functionToolCalls.map((toolCall) => ({
-      toolCallId: toolCall.id,
-      toolName: toolCall.function.name,
-      argumentsJson: toolCall.function.arguments,
-    })),
+  const toolExecutions = executeAgentToolCalls(functionToolCalls, context, {
+    onEvent: emitAgentEvent,
   });
-  const toolExecutions = functionToolCalls.map(
-    (toolCall): AgentToolExecution => executeAgentTool(toolCall),
-  );
-  assertAgentRunNotAborted(context);
   const toolStep = createToolStep(
     functionToolCalls,
     toolExecutions,
