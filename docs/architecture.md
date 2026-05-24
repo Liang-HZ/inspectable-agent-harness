@@ -78,6 +78,7 @@ lib/agent-input.ts                  Zod agent request body parsing and validatio
 lib/agent-permissions.ts            Approval policy, sandbox mode, and permission decisions
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
 lib/agent-events.ts                 Agent runtime event and run state types
+lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Local agent tool registry and concrete handlers
@@ -211,6 +212,24 @@ records each runtime permission decision. `approval_requested` records that a
 tool call needs user approval, but interactive approval resume is not
 implemented yet.
 
+`lib/agent-session-store.ts` owns JSONL session rollout files.
+
+It writes inspectable append-only session records for streaming agent runs. Each
+line is a JSON object with `timestamp`, `type`, and `payload`. The first line is
+`session_meta`, the second line is the current `turn_context`, and subsequent
+`agent_event` lines mirror the runtime event stream emitted by `lib/agent.ts`.
+
+Current files are written under:
+
+```text
+data/agent-sessions/YYYY/MM/DD/rollout-{timestamp}-{runId}.jsonl
+```
+
+`data/agent-sessions/` is ignored by git because session files can contain user
+input, prompts, tool arguments, model output, and other sensitive runtime data.
+This module is currently used by `/api/agent/stream`; `/api/agent` can be wired
+to the same store after the non-streaming path emits `AgentEvent`.
+
 For `model_started`, the `stage` field describes why the model call is starting.
 `tool_or_answer_selection` means the agent is asking the model to choose whether
 to answer directly or request a tool. `answer_generation` means the agent is
@@ -269,6 +288,7 @@ lib/agent-input.ts                  Zod request body parsing and validation
 lib/agent-permissions.ts            Approval and sandbox policy decisions
 lib/agent-run-context.ts            Per-run lifecycle context and cancellation
 lib/agent-events.ts                 Internal runtime events and derived run state
+lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers
 lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
 lib/agent-tools.ts                  Concrete local tool registry and handlers
@@ -522,7 +542,7 @@ The final approval flow should replace this throw with a pause/resume protocol:
 ```text
 tool_permission_decided(ask)
 approval_requested
-persist run state and pending tool call
+persist run state and pending tool call in JSONL session records
 return or stream waiting_for_approval to the client
 client/user approves or denies
 resume the same run from the pending tool call
@@ -532,10 +552,62 @@ resume the same run from the pending tool call
 current tool call and may fail the run immediately unless a future policy layer
 chooses to feed the denial back to the model as a recoverable tool result.
 
+## Session Rollout Design
+
+The session store follows the Codex-style rollout idea in a smaller form. Codex
+stores a full session as JSONL with tagged rows such as `session_meta`,
+`response_item`, `event_msg`, `turn_context`, and `compacted`. This project
+starts with fewer row types because the runtime does not yet have a
+provider-neutral model-history contract.
+
+Current row shape:
+
+```ts
+type AgentSessionRecord =
+  | { timestamp: string; type: 'session_meta'; payload: AgentSessionMeta }
+  | { timestamp: string; type: 'turn_context'; payload: AgentTurnContext }
+  | { timestamp: string; type: 'agent_event'; payload: AgentEvent };
+```
+
+Example file:
+
+```text
+{"timestamp":"...","type":"session_meta","payload":{"id":"...","cwd":"...","source":"api_agent_stream",...}}
+{"timestamp":"...","type":"turn_context","payload":{"turnId":"...","model":"...","approvalPolicy":"on_request","sandboxMode":"read_only"}}
+{"timestamp":"...","type":"agent_event","payload":{"type":"run_started","runId":"..."}}
+{"timestamp":"...","type":"agent_event","payload":{"type":"step_created","step":{...}}}
+{"timestamp":"...","type":"agent_event","payload":{"type":"run_succeeded","result":{...}}}
+```
+
+Current guarantees:
+
+- records are append-only
+- every append writes one JSONL line
+- writes are synchronous in the current request so write failures fail fast
+- session files survive process restart
+- session files are not committed to git
+
+Current limitations:
+
+- no resume API yet
+- no compaction rows yet
+- no `response_item` rows yet
+- no model-history reconstruction yet
+- approval resume is not implemented yet
+
+Future session work should add:
+
+```text
+response_item    provider-neutral model-visible history
+event_msg        UI/internal events that are not model-visible
+compacted        summary plus optional replacement history
+resume API       reconstruct AgentRunState and model history from JSONL
+approval API     approve or deny a pending approval_requested event
+```
+
 The next agent boundary can add these modules when the runtime needs them:
 
 ```text
-lib/agent-session-store.ts          Append-only event log and resumable runs
 lib/tools/*.ts                      Larger tool families
 ```
 
@@ -583,15 +655,18 @@ The current implementation is intentionally small:
   execution.
 - `AgentStreamProjection` maps runtime events to the current frontend SSE
   contract.
+- `AgentSessionStore` persists streaming run metadata, turn context, and runtime
+  events as JSONL.
 - Existing `AgentStep` objects remain the frontend display contract.
 - Existing SSE events remain compatible with the current React UI.
 
 Future work should grow the harness in this order:
 
-1. add interactive approval resume and user-input events
-2. persist the event log so a run can be inspected, retried, or resumed
-3. enforce sandbox mode for file, shell, network, or external API tools
-4. add provider-neutral model message contracts after the runtime loop is stable
+1. add read/list APIs for JSONL sessions
+2. add interactive approval resume and user-input events
+3. add provider-neutral `response_item` records for model-visible history
+4. enforce sandbox mode for file, shell, network, or external API tools
+5. add compaction and history reconstruction
 
 ## Maintenance Rule
 

@@ -17,6 +17,11 @@ import {
   createAgentRunContext,
   type AgentRunContextInput,
 } from './agent-run-context';
+import {
+  appendAgentSessionEvent,
+  appendAgentTurnContext,
+  createAgentSession,
+} from './agent-session-store';
 import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
 import { executeAgentToolCalls } from './agent-tool-runtime';
 import { agentTools } from './agent-tools';
@@ -330,15 +335,36 @@ export async function runAgentStream(
 ): Promise<AgentResult> {
   const context = createAgentRunContext(contextInput);
   const modelGateway = createAgentModelGateway(config, context);
+  const session = createAgentSession({
+    id: context.runId,
+    cwd: process.cwd(),
+    source: 'api_agent_stream',
+    modelProvider: 'openai-compatible',
+    model: config.model,
+    baseURL: config.baseURL,
+    policy: context.policy,
+  });
+  appendAgentTurnContext(session, {
+    turnId: context.runId,
+    model: config.model,
+    approvalPolicy: context.policy.approvalPolicy,
+    sandboxMode: context.policy.sandboxMode,
+    temperature: input.temperature,
+  });
   let runState = createAgentRunState(context.runId);
   const prompt = buildAgentPrompt(input);
   const steps: AgentStep[] = [];
 
   function emitAgentEvent(event: AgentEvent): void {
+    appendAgentSessionEvent(session, event);
     runState = applyAgentEvent(runState, event);
     callbacks.onEvent(event);
     logAgentEvent(context.runId, event);
   }
+
+  logAgentInfo(context.runId, 'session_created', {
+    path: session.path,
+  });
 
   emitAgentEvent({
     type: 'run_started',
