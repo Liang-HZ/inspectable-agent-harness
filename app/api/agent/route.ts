@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
   try {
     const result = await runAgent(parsedInput.input, modelConfig.config, {
       runId: runId,
+      signal: request.signal,
     });
     logAgentInfo(runId, 'request_finished', {
       model: result.model,

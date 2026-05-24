@@ -14,6 +14,10 @@ type AgentStreamCallbacks = {
   onError: (event: Extract<AgentStreamEvent, { type: 'error' }>) => void;
 };
 
+type AgentStreamRequestOptions = {
+  signal?: AbortSignal;
+};
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -118,12 +122,14 @@ function parseSseMessage(message: string): unknown {
 export async function requestAgentRunStream(
   body: AgentRequestBody,
   callbacks: AgentStreamCallbacks,
+  options: AgentStreamRequestOptions = {},
 ): Promise<void> {
   const response = await fetch('/api/agent/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
+    signal: options.signal,
     body: JSON.stringify({
       task: body.task,
       goal: body.goal,
@@ -134,6 +140,10 @@ export async function requestAgentRunStream(
   });
 
   if (!response.ok || response.body === null) {
+    if (options.signal?.aborted) {
+      return;
+    }
+
     callbacks.onError({
       type: 'error',
       error: 'Streaming request failed.',
@@ -147,6 +157,10 @@ export async function requestAgentRunStream(
 
   while (true) {
     const readResult = await reader.read();
+    if (options.signal?.aborted) {
+      return;
+    }
+
     if (readResult.done) {
       break;
     }

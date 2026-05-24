@@ -7,15 +7,19 @@ import type {
 
 import type { AgentResult, AgentStep } from './agent-api-types';
 import type { AgentInput } from './agent-input';
+import {
+  assertAgentRunNotAborted,
+  createAgentRunContext,
+  type AgentRunContextInput,
+} from './agent-run-context';
 import { logAgentInfo, logAgentStep } from './agent-log';
 import { agentTools, executeAgentTool } from './agent-tools';
 import type { AgentToolExecution } from './agent-tools';
 import type { ModelConfig } from './env';
-import { createOpenAICompatibleClient } from './openai-compatible-client';
-
-type RunAgentOptions = {
-  runId: string;
-};
+import {
+  createAgentModelGateway,
+  type AgentModelGateway,
+} from './model-gateway';
 
 type RunAgentStreamCallbacks = {
   onStep: (step: AgentStep) => void;
@@ -134,9 +138,8 @@ function createFinalAnswerStep(
 }
 
 async function streamFinalAnswer(
-  client: ReturnType<typeof createOpenAICompatibleClient>,
+  modelGateway: AgentModelGateway,
   input: AgentInput,
-  config: ModelConfig,
   messages: ChatCompletionMessageParam[],
   callbacks: RunAgentStreamCallbacks,
 ): Promise<{
@@ -144,15 +147,13 @@ async function streamFinalAnswer(
   answer: string;
   usage: unknown;
 }> {
-  const stream = await client.chat.completions.create({
-    model: config.model,
+  const stream = await modelGateway.streamChatCompletion({
     messages: messages,
-    stream: true,
     ...temperatureParam(input),
   });
 
   let answer = '';
-  let model = config.model;
+  let model = modelGateway.model;
 
   for await (const chunk of stream) {
     model = chunk.model ?? model;
@@ -180,16 +181,18 @@ async function streamFinalAnswer(
 export async function runAgent(
   input: AgentInput,
   config: ModelConfig,
-  options: RunAgentOptions,
+  contextInput: AgentRunContextInput,
 ): Promise<AgentResult> {
-  const client = createOpenAICompatibleClient(config);
+  const context = createAgentRunContext(contextInput);
+  const modelGateway = createAgentModelGateway(config, context);
   const prompt = buildAgentPrompt(input);
   const steps: AgentStep[] = [];
 
+  assertAgentRunNotAborted(context);
   const promptStep = createPromptStep(input, prompt, steps.length + 1);
   steps.push(promptStep);
-  logAgentStep(options.runId, promptStep);
-  logAgentInfo(options.runId, 'prompt_built', {
+  logAgentStep(context.runId, promptStep);
+  logAgentInfo(context.runId, 'prompt_built', {
     prompt: prompt,
     promptLength: prompt.length,
   });
@@ -205,8 +208,7 @@ export async function runAgent(
     },
   ];
 
-  const decisionCompletion = await client.chat.completions.create({
-    model: config.model,
+  const decisionCompletion = await modelGateway.createChatCompletion({
     messages: baseMessages,
     tools: agentTools,
     tool_choice: 'auto',
@@ -232,8 +234,8 @@ export async function runAgent(
       },
     };
     steps.push(directAnswerStep);
-    logAgentStep(options.runId, directAnswerStep);
-    logAgentInfo(options.runId, 'model_answer_received', {
+    logAgentStep(context.runId, directAnswerStep);
+    logAgentInfo(context.runId, 'model_answer_received', {
       answer: answer,
       answerLength: answer.length,
       model: decisionCompletion.model,
@@ -250,16 +252,18 @@ export async function runAgent(
     };
   }
 
+  assertAgentRunNotAborted(context);
   const toolExecutions = functionToolCalls.map(
     (toolCall): AgentToolExecution => executeAgentTool(toolCall),
   );
+  assertAgentRunNotAborted(context);
   const toolStep = createToolStep(
     functionToolCalls,
     toolExecutions,
     steps.length + 1,
   );
   steps.push(toolStep);
-  logAgentStep(options.runId, toolStep);
+  logAgentStep(context.runId, toolStep);
 
   const toolMessages: ChatCompletionMessageParam[] = toolExecutions.map(
     (execution) => ({
@@ -269,8 +273,7 @@ export async function runAgent(
     }),
   );
 
-  const finalCompletion = await client.chat.completions.create({
-    model: config.model,
+  const finalCompletion = await modelGateway.createChatCompletion({
     messages: [
       ...baseMessages,
       buildAssistantToolCallMessage(decisionMessage),
@@ -293,8 +296,8 @@ export async function runAgent(
     true,
   );
   steps.push(finalStep);
-  logAgentStep(options.runId, finalStep);
-  logAgentInfo(options.runId, 'model_answer_received', {
+  logAgentStep(context.runId, finalStep);
+  logAgentInfo(context.runId, 'model_answer_received', {
     answer: finalAnswer,
     answerLength: finalAnswer.length,
     model: finalCompletion.model,
@@ -313,18 +316,20 @@ export async function runAgent(
 export async function runAgentStream(
   input: AgentInput,
   config: ModelConfig,
-  options: RunAgentOptions,
+  contextInput: AgentRunContextInput,
   callbacks: RunAgentStreamCallbacks,
 ): Promise<AgentResult> {
-  const client = createOpenAICompatibleClient(config);
+  const context = createAgentRunContext(contextInput);
+  const modelGateway = createAgentModelGateway(config, context);
   const prompt = buildAgentPrompt(input);
   const steps: AgentStep[] = [];
 
+  assertAgentRunNotAborted(context);
   const promptStep = createPromptStep(input, prompt, steps.length + 1);
   steps.push(promptStep);
   callbacks.onStep(promptStep);
-  logAgentStep(options.runId, promptStep);
-  logAgentInfo(options.runId, 'prompt_built', {
+  logAgentStep(context.runId, promptStep);
+  logAgentInfo(context.runId, 'prompt_built', {
     prompt: prompt,
     promptLength: prompt.length,
   });
@@ -340,8 +345,7 @@ export async function runAgentStream(
     },
   ];
 
-  const decisionCompletion = await client.chat.completions.create({
-    model: config.model,
+  const decisionCompletion = await modelGateway.createChatCompletion({
     messages: baseMessages,
     tools: agentTools,
     tool_choice: 'auto',
@@ -356,9 +360,8 @@ export async function runAgentStream(
   const functionToolCalls = readFunctionToolCalls(decisionMessage);
   if (functionToolCalls.length === 0) {
     const finalAnswer = await streamFinalAnswer(
-      client,
+      modelGateway,
       input,
-      config,
       baseMessages,
       callbacks,
     );
@@ -371,7 +374,7 @@ export async function runAgentStream(
     );
     steps.push(finalStep);
     callbacks.onStep(finalStep);
-    logAgentStep(options.runId, finalStep);
+    logAgentStep(context.runId, finalStep);
 
     return {
       model: finalAnswer.model,
@@ -381,9 +384,11 @@ export async function runAgentStream(
     };
   }
 
+  assertAgentRunNotAborted(context);
   const toolExecutions = functionToolCalls.map(
     (toolCall): AgentToolExecution => executeAgentTool(toolCall),
   );
+  assertAgentRunNotAborted(context);
   const toolStep = createToolStep(
     functionToolCalls,
     toolExecutions,
@@ -391,7 +396,7 @@ export async function runAgentStream(
   );
   steps.push(toolStep);
   callbacks.onStep(toolStep);
-  logAgentStep(options.runId, toolStep);
+  logAgentStep(context.runId, toolStep);
 
   const toolMessages: ChatCompletionMessageParam[] = toolExecutions.map(
     (execution) => ({
@@ -401,9 +406,8 @@ export async function runAgentStream(
     }),
   );
   const finalAnswer = await streamFinalAnswer(
-    client,
+    modelGateway,
     input,
-    config,
     [
       ...baseMessages,
       buildAssistantToolCallMessage(decisionMessage),
@@ -420,8 +424,8 @@ export async function runAgentStream(
   );
   steps.push(finalStep);
   callbacks.onStep(finalStep);
-  logAgentStep(options.runId, finalStep);
-  logAgentInfo(options.runId, 'model_answer_received', {
+  logAgentStep(context.runId, finalStep);
+  logAgentInfo(context.runId, 'model_answer_received', {
     answer: finalAnswer.answer,
     answerLength: finalAnswer.answer.length,
     model: finalAnswer.model,

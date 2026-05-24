@@ -259,6 +259,32 @@ input {
   background: #94a3a8;
 }
 
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-width: 88px;
+  height: 42px;
+  border: 1px solid #bcc8cc;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #33464d;
+  padding: 0 14px;
+  font-weight: 760;
+}
+
+.secondaryButton:hover {
+  border-color: #9f2e2e;
+  color: #9f2e2e;
+}
+
 .buttonDot {
   width: 8px;
   height: 8px;

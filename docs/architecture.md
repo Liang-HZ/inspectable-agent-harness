@@ -38,10 +38,12 @@ flowchart TD
   AgentStreamRoute --> Env
   AgentRoute --> AgentService[lib/agent.ts]
   AgentStreamRoute --> AgentService
+  AgentService --> AgentRunContext[lib/agent-run-context.ts]
+  AgentService --> ModelGateway[lib/model-gateway.ts]
   AgentService --> AgentTools[lib/agent-tools.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
-  AgentService --> OpenAIClient
+  ModelGateway --> OpenAIClient
   OpenAIClient --> Provider[OpenAI-compatible Chat Completions API]
 
   SharedTypes[lib/chat-api-types.ts] -. shared contract .- Playground
@@ -69,8 +71,10 @@ app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-input.ts                  Zod agent request body parsing and validation
+lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tools.ts                  Local agent tool definitions and execution
+lib/model-gateway.ts                Model provider call boundary for agent runs
 lib/agent.ts                        Tool-using agent orchestration service
 ```
 
@@ -85,7 +89,8 @@ lib/agent.ts                        Tool-using agent orchestration service
 - submit state
 - success/error display state
 - calls to `requestChatCompletion(...)`
-- calls to `requestAgentRun(...)`
+- calls to `requestAgentRunStream(...)`
+- reducer actions for streamed agent steps and answer deltas
 
 It should not read `process.env`, create an OpenAI SDK client, or know how the
 server talks to the model provider.
@@ -158,7 +163,22 @@ a plain `ChatResult`.
 It receives `AgentInput` and `ModelConfig`, builds a model prompt, asks the
 model whether it needs a local tool, executes requested tools, asks the model
 for a final answer when a tool was used, and returns a plain `AgentResult` with
-inspectable steps.
+inspectable steps. It should coordinate agent steps and lifecycle checks rather
+than directly create SDK clients or pass SDK request options.
+
+`lib/agent-run-context.ts` owns per-run lifecycle context.
+
+It currently contains `runId` and `AbortSignal` plus the shared cancellation
+check. Future runtime-level concerns such as trace sinks, checkpoints, retry
+budgets, and approval wait state should attach to this boundary instead of
+being passed as unrelated optional parameters.
+
+`lib/model-gateway.ts` owns model provider calls for agent runs.
+
+It creates the OpenAI-compatible SDK client, applies the configured model,
+forwards the agent run `AbortSignal`, and exposes narrow `createChatCompletion`
+and `streamChatCompletion` methods. This module is the first place to add
+provider adapters for Anthropic or other non-OpenAI message formats.
 
 `lib/agent-tools.ts` owns local agent tools.
 
@@ -186,8 +206,10 @@ app/api/agent/route.ts              HTTP entry point for /api/agent
 app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-types.ts              Shared API request/response types
 lib/agent-input.ts                  Zod request body parsing and validation
+lib/agent-run-context.ts            Per-run lifecycle context and cancellation
 lib/agent-log.ts                    Structured server log helpers
 lib/agent-tools.ts                  Local tool definitions and execution
+lib/model-gateway.ts                Model provider boundary for agent runtime
 lib/agent.ts                        Agent orchestration service
 ```
 
@@ -200,14 +222,100 @@ answer text arrives as `answerDelta` events:
 flowchart TD
   AgentRoute[app/api/agent/route.ts] --> AgentInput[lib/agent-input.ts]
   AgentRoute --> AgentService[lib/agent.ts]
+  AgentService --> RunContext[lib/agent-run-context.ts]
+  AgentService --> ModelGateway[lib/model-gateway.ts]
   AgentService --> DecisionCall[Model decision call]
+  ModelGateway --> DecisionCall
   DecisionCall --> DirectAnswer[Direct answer]
   DecisionCall --> ToolCall[Tool call request]
   ToolCall --> AgentTools[lib/agent-tools.ts]
   AgentTools --> FinalCall[Final model call with tool result]
+  ModelGateway --> FinalCall
   DirectAnswer --> AgentResponse[Final answer plus steps]
   FinalCall --> AgentResponse
 ```
+
+## Streaming UI Flow
+
+The streaming path keeps the agent runtime on the server and uses React as an
+observer of the run. The browser does not execute tools or call the model.
+
+```mermaid
+sequenceDiagram
+  participant User as Browser user
+  participant UI as components/chat-playground.tsx
+  participant Client as lib/agent-api-client.ts
+  participant Route as app/api/agent/stream/route.ts
+  participant Agent as lib/agent.ts
+  participant Context as lib/agent-run-context.ts
+  participant Gateway as lib/model-gateway.ts
+  participant Tools as lib/agent-tools.ts
+  participant Model as OpenAI-compatible API
+
+  User->>UI: Submit agent form
+  UI->>UI: Create AbortController
+  UI->>UI: dispatch(agentSubmitStarted)
+  UI->>Client: requestAgentRunStream(body, callbacks, signal)
+  Client->>Route: POST /api/agent/stream with fetch signal
+  Route->>Agent: runAgentStream(input, config, signal, callbacks)
+  Agent->>Context: create run context
+  Agent-->>Route: onStep(Build prompt)
+  Route-->>Client: SSE step
+  Client-->>UI: onStep(event)
+  UI->>UI: dispatch(agentStepReceived)
+  Agent->>Gateway: Decision call with tools
+  Gateway->>Model: Chat completion with signal
+  alt Model requests inspect_text
+    Agent->>Tools: executeAgentTool(toolCall)
+    Tools-->>Agent: tool result
+    Agent-->>Route: onStep(Run local tool)
+    Route-->>Client: SSE step
+    Client-->>UI: onStep(event)
+    UI->>UI: dispatch(agentStepReceived)
+    Agent->>Gateway: Stream final answer with tool result
+  else Model can answer directly
+    Agent->>Gateway: Stream final answer directly
+  end
+  loop Model answer chunks
+    Model-->>Gateway: delta
+    Gateway-->>Agent: guarded delta
+    Agent-->>Route: onAnswerDelta(delta)
+    Route-->>Client: SSE answerDelta
+    Client-->>UI: onAnswerDelta(event)
+    UI->>UI: dispatch(agentAnswerDeltaReceived)
+  end
+  Agent-->>Route: AgentResult
+  Route-->>Client: SSE done
+  Client-->>UI: onDone(event)
+  UI->>UI: dispatch(agentSubmitFinished)
+```
+
+State ownership in the React component is intentionally narrow:
+
+- `agentSubmitStarted` switches `agentView` to `streaming` and clears old output.
+- `agentStepReceived` appends one `AgentStep` to `agentView.steps`.
+- `agentAnswerDeltaReceived` appends text to `agentView.answer`.
+- `agentRunAborted` preserves already received steps and answer text, then marks
+  the run as `aborted`.
+- `agentSubmitFinished` replaces the temporary streaming state with the final
+  `AgentResult`.
+
+Cancellation uses the platform abort chain rather than a model instruction:
+
+- `components/chat-playground.tsx` owns an `AbortController` for the current
+  agent run.
+- `lib/agent-api-client.ts` passes the `AbortSignal` to `fetch(...)`.
+- `app/api/agent/stream/route.ts` reads `request.signal` and passes it into the
+  agent service.
+- `lib/agent-run-context.ts` makes the signal part of the agent run lifecycle.
+- `lib/model-gateway.ts` passes the same signal into OpenAI SDK request options
+  and guards streamed chunks.
+- `lib/agent.ts` checks the run context between agent stages such as prompt
+  construction and tool execution.
+
+Typing a new "stop" instruction into the model is not a true cancellation of the
+in-flight request. It is just another future request. The real interruption path
+is aborting the current HTTP/model request.
 
 The next agent boundary can add these modules when the runtime needs them:
 

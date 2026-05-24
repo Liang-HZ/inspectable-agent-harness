@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, ReactNode, useReducer } from 'react';
+import { FormEvent, ReactNode, useReducer, useRef } from 'react';
 
 import { requestAgentRunStream } from '../lib/agent-api-client';
 import type { AgentApiResponse, AgentStep } from '../lib/agent-api-types';
@@ -51,6 +51,11 @@ type AgentViewState =
       answer: string;
       steps: AgentStep[];
       model: string | null;
+    }
+  | {
+      status: 'aborted';
+      answer: string;
+      steps: AgentStep[];
     }
   | {
       status: 'success';
@@ -125,6 +130,9 @@ type WorkbenchAction =
       delta: string;
     }
   | {
+      type: 'agentRunAborted';
+    }
+  | {
       type: 'agentSubmitFinished';
       response: AgentApiResponse;
     };
@@ -161,6 +169,7 @@ type AgentFormProps = {
   isSubmitting: boolean;
   canSubmit: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onCancel: () => void;
   onTaskChange: (value: string) => void;
   onGoalChange: (value: string) => void;
   onContextChange: (value: string) => void;
@@ -341,6 +350,20 @@ function workbenchReducer(
         },
       };
 
+    case 'agentRunAborted':
+      if (state.agentView.status !== 'streaming') {
+        return state;
+      }
+
+      return {
+        ...state,
+        agentView: {
+          status: 'aborted',
+          answer: state.agentView.answer,
+          steps: state.agentView.steps,
+        },
+      };
+
     case 'agentSubmitFinished':
       return {
         ...state,
@@ -413,6 +436,10 @@ function statusText(
 
   if (currentStatus === 'error') {
     return 'Error';
+  }
+
+  if (currentStatus === 'aborted') {
+    return 'Aborted';
   }
 
   return 'Idle';
@@ -541,6 +568,7 @@ function AgentForm({
   isSubmitting,
   canSubmit,
   onSubmit,
+  onCancel,
   onTaskChange,
   onGoalChange,
   onContextChange,
@@ -563,9 +591,16 @@ function AgentForm({
         onModelChange={onModelChange}
         onTemperatureChange={onTemperatureChange}
       />
-      <SubmitButton isSubmitting={isSubmitting} disabled={!canSubmit}>
-        {isSubmitting ? 'Running agent' : 'Run agent'}
-      </SubmitButton>
+      <div className="formActions">
+        <SubmitButton isSubmitting={isSubmitting} disabled={!canSubmit}>
+          {isSubmitting ? 'Running agent' : 'Run agent'}
+        </SubmitButton>
+        {isSubmitting ? (
+          <button className="secondaryButton" type="button" onClick={onCancel}>
+            Stop
+          </button>
+        ) : null}
+      </div>
     </form>
   );
 }
@@ -666,6 +701,35 @@ function AgentResultView({ view }: { view: AgentViewState }) {
     );
   }
 
+  if (view.status === 'aborted') {
+    return (
+      <div className="resultStack">
+        <section className="answerPanel">
+          <div className="sectionHeader">
+            <span>Answer</span>
+            <code>aborted</code>
+          </div>
+          <pre className="answerText">
+            {view.answer === ''
+              ? 'Run stopped before answer output.'
+              : view.answer}
+          </pre>
+        </section>
+        <section className="tracePanel">
+          <div className="sectionHeader">
+            <span>Trace</span>
+            <code>{view.steps.length} steps</code>
+          </div>
+          {view.steps.length === 0 ? (
+            <EmptyState>Run stopped before first step.</EmptyState>
+          ) : (
+            <AgentTrace steps={view.steps} />
+          )}
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="resultStack">
       <section className="answerPanel">
@@ -730,6 +794,7 @@ function ResultPanel({ mode, chatView, agentView }: ResultPanelProps) {
 
 export function ChatPlayground() {
   const [state, dispatch] = useReducer(workbenchReducer, initialState);
+  const agentAbortControllerRef = useRef<AbortController | null>(null);
   const chatIsSubmitting = state.chatView.status === 'submitting';
   const agentIsSubmitting = state.agentView.status === 'streaming';
   const chatCanSubmit =
@@ -755,6 +820,15 @@ export function ChatPlayground() {
 
   async function submitAgent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    agentAbortControllerRef.current?.abort();
+
+    const abortController = new AbortController();
+    agentAbortControllerRef.current = abortController;
+
+    const canUpdateCurrentRun = () =>
+      agentAbortControllerRef.current === abortController &&
+      !abortController.signal.aborted;
+
     dispatch({ type: 'agentSubmitStarted' });
 
     try {
@@ -768,18 +842,30 @@ export function ChatPlayground() {
         },
         {
           onStep: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
             dispatch({
               type: 'agentStepReceived',
               step: event.step,
             });
           },
           onAnswerDelta: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
             dispatch({
               type: 'agentAnswerDeltaReceived',
               delta: event.delta,
             });
           },
           onDone: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
             dispatch({
               type: 'agentSubmitFinished',
               response: {
@@ -789,6 +875,10 @@ export function ChatPlayground() {
             });
           },
           onError: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
             dispatch({
               type: 'agentSubmitFinished',
               response: {
@@ -798,8 +888,19 @@ export function ChatPlayground() {
             });
           },
         },
+        {
+          signal: abortController.signal,
+        },
       );
     } catch (error) {
+      if (abortController.signal.aborted) {
+        if (agentAbortControllerRef.current === abortController) {
+          dispatch({ type: 'agentRunAborted' });
+        }
+
+        return;
+      }
+
       dispatch({
         type: 'agentSubmitFinished',
         response: {
@@ -807,7 +908,16 @@ export function ChatPlayground() {
           error: error instanceof Error ? error.message : 'Request failed',
         },
       });
+    } finally {
+      if (agentAbortControllerRef.current === abortController) {
+        agentAbortControllerRef.current = null;
+      }
     }
+  }
+
+  function cancelAgentRun() {
+    agentAbortControllerRef.current?.abort();
+    dispatch({ type: 'agentRunAborted' });
   }
 
   return (
@@ -849,6 +959,7 @@ export function ChatPlayground() {
               isSubmitting={agentIsSubmitting}
               canSubmit={agentCanSubmit}
               onSubmit={submitAgent}
+              onCancel={cancelAgentRun}
               onTaskChange={(value) =>
                 dispatch({
                   type: 'agentTaskChanged',

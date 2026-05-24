@@ -27,6 +27,14 @@ function encodeAgentStreamEvent(event: AgentStreamEvent): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.name === 'AbortError' || error.message.includes('aborted');
+  }
+
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   const runId = randomUUID();
   logAgentInfo(runId, 'stream_request_received');
@@ -77,6 +85,7 @@ export async function POST(request: NextRequest) {
           modelConfig.config,
           {
             runId: runId,
+            signal: request.signal,
           },
           {
             onStep: (step) => {
@@ -113,6 +122,11 @@ export async function POST(request: NextRequest) {
           }),
         );
       } catch (error) {
+        if (request.signal.aborted || isAbortLikeError(error)) {
+          logAgentInfo(runId, 'stream_request_aborted');
+          return;
+        }
+
         const message = errorMessage(error);
         logAgentError(runId, 'stream_request_failed', {
           error: message,
