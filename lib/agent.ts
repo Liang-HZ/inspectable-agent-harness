@@ -6,13 +6,18 @@ import type {
 } from 'openai/resources/chat/completions';
 
 import type { AgentResult, AgentStep } from './agent-api-types';
+import {
+  applyAgentEvent,
+  createAgentRunState,
+  type AgentEvent,
+} from './agent-events';
 import type { AgentInput } from './agent-input';
 import {
   assertAgentRunNotAborted,
   createAgentRunContext,
   type AgentRunContextInput,
 } from './agent-run-context';
-import { logAgentInfo, logAgentStep } from './agent-log';
+import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
 import { agentTools, executeAgentTool } from './agent-tools';
 import type { AgentToolExecution } from './agent-tools';
 import type { ModelConfig } from './env';
@@ -24,6 +29,7 @@ import {
 type RunAgentStreamCallbacks = {
   onStep: (step: AgentStep) => void;
   onAnswerDelta: (delta: string) => void;
+  onEvent?: (event: AgentEvent) => void;
 };
 
 const AGENT_SYSTEM_MESSAGE =
@@ -142,11 +148,17 @@ async function streamFinalAnswer(
   input: AgentInput,
   messages: ChatCompletionMessageParam[],
   callbacks: RunAgentStreamCallbacks,
+  emitAgentEvent: (event: AgentEvent) => void,
 ): Promise<{
   model: string;
   answer: string;
   usage: unknown;
 }> {
+  emitAgentEvent({
+    type: 'model_started',
+    stage: 'answer_generation',
+  });
+
   const stream = await modelGateway.streamChatCompletion({
     messages: messages,
     ...temperatureParam(input),
@@ -164,6 +176,10 @@ async function streamFinalAnswer(
     }
 
     answer += delta;
+    emitAgentEvent({
+      type: 'model_delta',
+      delta: delta,
+    });
     callbacks.onAnswerDelta(delta);
   }
 
@@ -321,12 +337,28 @@ export async function runAgentStream(
 ): Promise<AgentResult> {
   const context = createAgentRunContext(contextInput);
   const modelGateway = createAgentModelGateway(config, context);
+  let runState = createAgentRunState(context.runId);
   const prompt = buildAgentPrompt(input);
   const steps: AgentStep[] = [];
+
+  function emitAgentEvent(event: AgentEvent): void {
+    runState = applyAgentEvent(runState, event);
+    callbacks.onEvent?.(event);
+    logAgentEvent(context.runId, event);
+  }
+
+  emitAgentEvent({
+    type: 'run_started',
+    runId: context.runId,
+  });
 
   assertAgentRunNotAborted(context);
   const promptStep = createPromptStep(input, prompt, steps.length + 1);
   steps.push(promptStep);
+  emitAgentEvent({
+    type: 'step_created',
+    step: promptStep,
+  });
   callbacks.onStep(promptStep);
   logAgentStep(context.runId, promptStep);
   logAgentInfo(context.runId, 'prompt_built', {
@@ -345,6 +377,10 @@ export async function runAgentStream(
     },
   ];
 
+  emitAgentEvent({
+    type: 'model_started',
+    stage: 'tool_or_answer_selection',
+  });
   const decisionCompletion = await modelGateway.createChatCompletion({
     messages: baseMessages,
     tools: agentTools,
@@ -364,6 +400,7 @@ export async function runAgentStream(
       input,
       baseMessages,
       callbacks,
+      emitAgentEvent,
     );
     const finalStep = createFinalAnswerStep(
       finalAnswer.model,
@@ -373,18 +410,40 @@ export async function runAgentStream(
       false,
     );
     steps.push(finalStep);
+    emitAgentEvent({
+      type: 'step_created',
+      step: finalStep,
+    });
     callbacks.onStep(finalStep);
     logAgentStep(context.runId, finalStep);
 
-    return {
+    const result = {
       model: finalAnswer.model,
       answer: finalAnswer.answer,
       steps: steps,
       usage: finalAnswer.usage,
     };
+    emitAgentEvent({
+      type: 'run_succeeded',
+      result: result,
+    });
+    logAgentInfo(context.runId, 'runtime_state_finished', {
+      status: runState.status,
+      eventCount: runState.events.length,
+    });
+
+    return result;
   }
 
   assertAgentRunNotAborted(context);
+  emitAgentEvent({
+    type: 'tool_requested',
+    toolRequests: functionToolCalls.map((toolCall) => ({
+      toolCallId: toolCall.id,
+      toolName: toolCall.function.name,
+      argumentsJson: toolCall.function.arguments,
+    })),
+  });
   const toolExecutions = functionToolCalls.map(
     (toolCall): AgentToolExecution => executeAgentTool(toolCall),
   );
@@ -395,6 +454,10 @@ export async function runAgentStream(
     steps.length + 1,
   );
   steps.push(toolStep);
+  emitAgentEvent({
+    type: 'step_created',
+    step: toolStep,
+  });
   callbacks.onStep(toolStep);
   logAgentStep(context.runId, toolStep);
 
@@ -414,6 +477,7 @@ export async function runAgentStream(
       ...toolMessages,
     ],
     callbacks,
+    emitAgentEvent,
   );
   const finalStep = createFinalAnswerStep(
     finalAnswer.model,
@@ -423,6 +487,10 @@ export async function runAgentStream(
     true,
   );
   steps.push(finalStep);
+  emitAgentEvent({
+    type: 'step_created',
+    step: finalStep,
+  });
   callbacks.onStep(finalStep);
   logAgentStep(context.runId, finalStep);
   logAgentInfo(context.runId, 'model_answer_received', {
@@ -432,10 +500,20 @@ export async function runAgentStream(
     hasUsage: finalAnswer.usage !== undefined && finalAnswer.usage !== null,
   });
 
-  return {
+  const result = {
     model: finalAnswer.model,
     answer: finalAnswer.answer,
     steps: steps,
     usage: finalAnswer.usage,
   };
+  emitAgentEvent({
+    type: 'run_succeeded',
+    result: result,
+  });
+  logAgentInfo(context.runId, 'runtime_state_finished', {
+    status: runState.status,
+    eventCount: runState.events.length,
+  });
+
+  return result;
 }

@@ -39,6 +39,7 @@ flowchart TD
   AgentRoute --> AgentService[lib/agent.ts]
   AgentStreamRoute --> AgentService
   AgentService --> AgentRunContext[lib/agent-run-context.ts]
+  AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
   AgentService --> AgentTools[lib/agent-tools.ts]
 
@@ -72,6 +73,7 @@ lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-input.ts                  Zod agent request body parsing and validation
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
+lib/agent-events.ts                 Agent runtime event and run state types
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tools.ts                  Local agent tool definitions and execution
 lib/model-gateway.ts                Model provider call boundary for agent runs
@@ -173,6 +175,24 @@ check. Future runtime-level concerns such as trace sinks, checkpoints, retry
 budgets, and approval wait state should attach to this boundary instead of
 being passed as unrelated optional parameters.
 
+`lib/agent-events.ts` owns the first internal agent harness event contract.
+
+`AgentEvent` is the runtime truth for what happened during a run. `AgentStep`
+is still the current frontend-friendly display projection. The streaming route
+continues to send `step` and `answerDelta` events today, but `lib/agent.ts`
+records internal events such as `run_started`, `model_started`, `model_delta`,
+`tool_requested`, `step_created`, and `run_succeeded`.
+
+For `model_started`, the `stage` field describes why the model call is starting.
+`tool_or_answer_selection` means the agent is asking the model to choose whether
+to answer directly or request a tool. `answer_generation` means the agent is
+asking the model to generate the final answer text.
+
+`AgentRunState` is a small derived state object built by applying events in
+order. It is not persistent yet. Its purpose is to make future cancellation,
+retry, approval, user-input, and resume behavior hang from one runtime model
+instead of scattered callbacks.
+
 `lib/model-gateway.ts` owns model provider calls for agent runs.
 
 It creates the OpenAI-compatible SDK client, applies the configured model,
@@ -207,6 +227,7 @@ app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 lib/agent-api-types.ts              Shared API request/response types
 lib/agent-input.ts                  Zod request body parsing and validation
 lib/agent-run-context.ts            Per-run lifecycle context and cancellation
+lib/agent-events.ts                 Internal runtime events and derived run state
 lib/agent-log.ts                    Structured server log helpers
 lib/agent-tools.ts                  Local tool definitions and execution
 lib/model-gateway.ts                Model provider boundary for agent runtime
@@ -223,6 +244,7 @@ flowchart TD
   AgentRoute[app/api/agent/route.ts] --> AgentInput[lib/agent-input.ts]
   AgentRoute --> AgentService[lib/agent.ts]
   AgentService --> RunContext[lib/agent-run-context.ts]
+  AgentService --> AgentEvents[lib/agent-events.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
   AgentService --> DecisionCall[Model decision call]
   ModelGateway --> DecisionCall
@@ -320,9 +342,49 @@ is aborting the current HTTP/model request.
 The next agent boundary can add these modules when the runtime needs them:
 
 ```text
-lib/agent-state.ts                  Agent state/action types
+lib/agent-permissions.ts            Approval policies and user review requests
+lib/agent-tool-runtime.ts           Tool registry, validation, timeout, cancellation
+lib/agent-session-store.ts          Append-only event log and resumable runs
 lib/tools/*.ts                      Larger tool families
 ```
+
+## Agent Harness Direction
+
+The long-term target is an agent runtime/harness, not only a single service that
+calls a model. In this project, harness means the backend layer around the model
+that controls:
+
+- task and context assembly
+- model-provider calls
+- tool registration and execution
+- cancellation and retry boundaries
+- permission and approval pauses
+- user input during a run
+- append-only run events
+- derived run state
+- logs, traceability, and future replay/evaluation
+
+The model remains one component inside the harness. The harness owns the loop:
+
+```text
+user task -> runtime event -> model call -> tool request -> tool execution
+          -> runtime event -> final answer or next loop
+```
+
+The current implementation is intentionally small:
+
+- `AgentEvent` is the internal runtime event contract.
+- `AgentRunState` is derived from events.
+- Existing `AgentStep` objects remain the frontend display contract.
+- Existing SSE events remain compatible with the current React UI.
+
+Future work should grow the harness in this order:
+
+1. make the stream route project from `AgentEvent` instead of direct callbacks
+2. move tool execution behind a `ToolRuntime`
+3. add permission and user-input events
+4. persist the event log so a run can be inspected, retried, or resumed
+5. add provider-neutral model message contracts after the runtime loop is stable
 
 ## Maintenance Rule
 

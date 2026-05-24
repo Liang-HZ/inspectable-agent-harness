@@ -1,4 +1,5 @@
 import type { AgentStep } from './agent-api-types';
+import type { AgentEvent } from './agent-events';
 import type { AgentInput } from './agent-input';
 import type { ModelConfig } from './env';
 
@@ -71,5 +72,11 @@ export function logAgentStep(runId: string, step: AgentStep): void {
     title: step.title,
     detail: step.detail,
     output: step.output,
+  });
+}
+
+export function logAgentEvent(runId: string, event: AgentEvent): void {
+  logAgentInfo(runId, 'runtime_event', {
+    runtimeEvent: event,
   });
 }
