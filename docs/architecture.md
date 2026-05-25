@@ -419,10 +419,13 @@ lib/model-gateway.ts                Provider dialect selection and model call bo
 lib/agent.ts                        Agent orchestration service
 ```
 
-This version has a small tool loop plus a streaming route. The model can answer
-directly, or it can request the local `inspect_text` tool before the final
-answer. In the UI, steps arrive as soon as the backend emits them, and final
-answer text arrives as `answerDelta` events:
+This version has the first real agent runtime spine. The model-visible history
+is represented by provider-neutral `AgentResponseItem` records. The runtime can
+call the model for tool selection, record function calls, execute a batch of
+tools, record function-call outputs, and continue the loop until the model no
+longer asks for tools or the max-round guard is reached. In the UI, steps arrive
+as soon as the backend emits them, and final answer text arrives as
+`answerDelta` events:
 
 ```mermaid
 flowchart TD
@@ -430,22 +433,70 @@ flowchart TD
   AgentRoute --> AgentService[lib/agent.ts]
   AgentService --> RunContext[lib/agent-run-context.ts]
   AgentService --> AgentEvents[lib/agent-events.ts]
+  AgentService --> ResponseItems[lib/agent-response-items.ts]
   AgentService --> ModelGateway[lib/model-gateway.ts]
   ModelGateway --> ModelDialect[lib/model-provider-dialect.ts]
   ModelDialect --> ChatDialect[OpenAI Chat Completions dialect]
   ModelDialect --> ResponsesDialect[OpenAI Responses dialect]
+  AgentService --> ToolScheduler[lib/agent-tool-scheduler.ts]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
-  AgentService --> DecisionCall[Model decision call]
-  ModelGateway --> DecisionCall
-  DecisionCall --> DirectAnswer[Direct answer]
-  DecisionCall --> ToolCall[Tool call request]
-  ToolCall --> ToolRuntime
+  AgentService --> ToolLoop[Multi-round tool loop]
+  ToolLoop --> ResponseItems
+  ToolLoop --> ModelGateway
+  ToolLoop --> ToolScheduler
+  ToolScheduler --> ToolRuntime
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
-  AgentTools --> FinalCall[Final model call with tool result]
+  AgentTools --> ResponseItems
+  ResponseItems --> FinalCall[Final answer model call]
   ModelGateway --> FinalCall
-  DirectAnswer --> AgentResponse[Final answer plus steps]
   FinalCall --> AgentResponse
 ```
+
+`AgentResponseItem` currently has three variants:
+
+```ts
+type AgentResponseItem =
+  | { type: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
+  | {
+      type: 'function_call';
+      callId: string;
+      name: string;
+      argumentsJson: string;
+    }
+  | {
+      type: 'function_call_output';
+      callId: string;
+      toolName: string;
+      output: unknown;
+      isError: boolean;
+    };
+```
+
+`lib/agent-response-items.ts` converts this history into
+`AgentModelMessage[]` before handing it to the selected provider dialect.
+Provider wire details remain inside the dialect files.
+
+Tool batching is handled by `lib/agent-tool-scheduler.ts`:
+
+```text
+all tool calls in batch have executionMode="parallel" -> run with Promise.all
+otherwise                                           -> run sequentially
+```
+
+Even when tools run in parallel, `function_call_output` records are appended in
+the model's original tool-call order. Runtime events may reflect real completion
+order; model history stays deterministic.
+
+Data dependency is not inferred by the runtime. If one tool needs another
+tool's output, the model should request the second tool in a later round after
+the first `function_call_output` is present in history. The scheduler only
+decides whether a single already-emitted batch is safe to run concurrently based
+on explicit tool metadata.
+
+Ordinary tool errors such as unknown tool names, invalid arguments, or handler
+exceptions become error-shaped `function_call_output` records. That keeps the
+model loop recoverable. Permission pauses and denied policy decisions remain
+fail-closed until approval resume exists.
 
 ## Streaming UI Flow
 
@@ -461,7 +512,9 @@ sequenceDiagram
   participant Projection as lib/agent-stream-projection.ts
   participant Agent as lib/agent.ts
   participant Context as lib/agent-run-context.ts
+  participant History as lib/agent-response-items.ts
   participant Gateway as lib/model-gateway.ts
+  participant Scheduler as lib/agent-tool-scheduler.ts
   participant ToolRuntime as lib/agent-tool-runtime.ts
   participant Tools as lib/agent-tools.ts
   participant Model as OpenAI-compatible API
@@ -473,27 +526,36 @@ sequenceDiagram
   Client->>Route: POST /api/agent/stream with fetch signal
   Route->>Agent: runAgentStream(input, config, signal, onEvent)
   Agent->>Context: create run context
+  Agent->>History: create system/user response_item history
   Agent-->>Route: AgentEvent step_created
   Route->>Projection: projectAgentEventToStreamEvent(event)
   Route-->>Client: SSE step
   Client-->>UI: onStep(event)
   UI->>UI: dispatch(agentStepReceived)
-  Agent->>Gateway: Provider-neutral decision request with tools
-  Gateway->>Model: Dialect-compiled model request with signal
-  alt Model requests inspect_text
-    Agent->>ToolRuntime: executeAgentToolCalls(toolCalls)
-    ToolRuntime->>Tools: execute concrete tool handler
-    Tools-->>ToolRuntime: tool result
-    ToolRuntime-->>Agent: tool executions
-    Agent-->>Route: AgentEvent step_created
-    Route->>Projection: projectAgentEventToStreamEvent(event)
-    Route-->>Client: SSE step
-    Client-->>UI: onStep(event)
-    UI->>UI: dispatch(agentStepReceived)
-    Agent->>Gateway: Stream final answer with tool result through selected dialect
-  else Model can answer directly
-    Agent->>Gateway: Stream final answer directly through selected dialect
+  loop Tool rounds until no tool calls or max rounds
+    Agent->>Gateway: Provider-neutral tool-selection request with history and tools
+    Gateway->>Model: Dialect-compiled model request with signal
+    Model-->>Gateway: assistant text and/or tool calls
+    Gateway-->>Agent: AgentModelResponse
+    alt Model requests tools
+      Agent->>History: append function_call response_item records
+      Agent->>Scheduler: executeAgentToolBatch(toolCalls)
+      Scheduler->>ToolRuntime: executeAgentToolCall(...)
+      ToolRuntime->>Tools: execute concrete tool handler
+      Tools-->>ToolRuntime: tool result or recoverable error
+      ToolRuntime-->>Scheduler: tool execution
+      Scheduler-->>Agent: ordered tool executions
+      Agent->>History: append ordered function_call_output records
+      Agent-->>Route: AgentEvent step_created
+      Route->>Projection: projectAgentEventToStreamEvent(event)
+      Route-->>Client: SSE step
+      Client-->>UI: onStep(event)
+      UI->>UI: dispatch(agentStepReceived)
+    else No tool calls
+      Agent->>Agent: exit tool loop
+    end
   end
+  Agent->>Gateway: Stream final answer with accumulated history
   loop Model answer chunks
     Model-->>Gateway: delta
     Gateway-->>Agent: guarded delta
@@ -682,9 +744,8 @@ chooses to feed the denial back to the model as a recoverable tool result.
 
 The session store follows the Codex-style rollout idea in a smaller form. Codex
 stores a full session as JSONL with tagged rows such as `session_meta`,
-`response_item`, `event_msg`, `turn_context`, and `compacted`. This project
-starts with fewer row types because the runtime does not yet have a
-provider-neutral model-history contract.
+`response_item`, `event_msg`, `turn_context`, and `compacted`. This project now
+persists both runtime events and provider-neutral model-visible history.
 
 Current row shape:
 
@@ -692,7 +753,8 @@ Current row shape:
 type AgentSessionRecord =
   | { timestamp: string; type: 'session_meta'; payload: AgentSessionMeta }
   | { timestamp: string; type: 'turn_context'; payload: AgentTurnContext }
-  | { timestamp: string; type: 'agent_event'; payload: AgentEvent };
+  | { timestamp: string; type: 'agent_event'; payload: AgentEvent }
+  | { timestamp: string; type: 'response_item'; payload: AgentResponseItem };
 ```
 
 Example file:
@@ -700,8 +762,12 @@ Example file:
 ```text
 {"timestamp":"...","type":"session_meta","payload":{"id":"...","cwd":"...","source":"api_agent_stream",...}}
 {"timestamp":"...","type":"turn_context","payload":{"turnId":"...","model":"...","wireApi":"openai-chat-completions","approvalPolicy":"on_request","sandboxMode":"read_only"}}
+{"timestamp":"...","type":"response_item","payload":{"type":"message","role":"system","content":"..."}}
+{"timestamp":"...","type":"response_item","payload":{"type":"message","role":"user","content":"..."}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_started","runId":"..."}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"step_created","step":{...}}}
+{"timestamp":"...","type":"response_item","payload":{"type":"function_call","callId":"...","name":"inspect_text","argumentsJson":"..."}}
+{"timestamp":"...","type":"response_item","payload":{"type":"function_call_output","callId":"...","toolName":"inspect_text","output":{...},"isError":false}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_succeeded","result":{"usage":{"totalTokenUsage":{...},"lastTokenUsage":{...},"calls":[...]}}}}
 ```
 
@@ -714,12 +780,13 @@ Current guarantees:
 - session files are not committed to git
 - local API clients can list sessions and read full records by id
 - final results include normalized per-call token usage and summed token usage
+- streaming agent runs persist `response_item` rows for system/user messages,
+  function calls, function-call outputs, and final assistant messages
 
 Current limitations:
 
 - no resume API yet
 - no compaction rows yet
-- no `response_item` rows yet
 - no model-history reconstruction yet
 - approval resume is not implemented yet
 - session read/list APIs are for local inspection and debugging
@@ -727,7 +794,6 @@ Current limitations:
 Future session work should add:
 
 ```text
-response_item    provider-neutral model-visible history
 event_msg        UI/internal events that are not model-visible
 compacted        summary plus optional replacement history
 approval API     approve or deny a pending approval_requested event
@@ -778,23 +844,26 @@ The current implementation is intentionally small:
 
 - `AgentEvent` is the internal runtime event contract.
 - `AgentRunState` is derived from events.
+- `AgentResponseItem` is the provider-neutral model-visible history contract.
+- `AgentToolScheduler` chooses sequential or opt-in parallel execution for a
+  batch of tool calls.
 - `AgentToolRuntime` wraps concrete tool execution and emits tool lifecycle
   events.
 - `AgentPermissions` makes annotation-based approval decisions before tool
   execution.
 - `AgentStreamProjection` maps runtime events to the current frontend SSE
   contract.
-- `AgentSessionStore` persists streaming run metadata, turn context, and runtime
-  events as JSONL.
+- `AgentSessionStore` persists streaming run metadata, turn context, runtime
+  events, and model-visible `response_item` records as JSONL.
 - Existing `AgentStep` objects remain the frontend display contract.
 - Existing SSE events remain compatible with the current React UI.
 
 Future work should grow the harness in this order:
 
 1. add interactive approval resume and user-input events
-2. add provider-neutral `response_item` records for model-visible history
-3. enforce sandbox mode for file, shell, network, or external API tools
-4. add compaction and history reconstruction
+2. enforce sandbox mode for file, shell, network, or external API tools
+3. add compaction and history reconstruction
+4. add richer tools and MCP-style external tool registration
 
 ## Maintenance Rule
 

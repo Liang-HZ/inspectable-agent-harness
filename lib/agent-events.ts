@@ -53,6 +53,7 @@ export type AgentEvent =
       toolName: string;
       input: unknown;
       result: unknown;
+      isError: boolean;
     }
   | {
       type: 'tool_permission_decided';

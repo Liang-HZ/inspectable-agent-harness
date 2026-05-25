@@ -11,6 +11,7 @@ import { join, relative } from 'path';
 import type { AgentEvent } from './agent-events';
 import type { AgentModelWireApi } from './agent-model-types';
 import type { AgentRunPolicy } from './agent-permissions';
+import type { AgentResponseItem } from './agent-response-items';
 
 export type AgentSessionSource = 'api_agent_stream';
 
@@ -69,6 +70,11 @@ export type AgentSessionRecord =
       timestamp: string;
       type: 'agent_event';
       payload: AgentEvent;
+    }
+  | {
+      timestamp: string;
+      type: 'response_item';
+      payload: AgentResponseItem;
     };
 
 export type CreateAgentSessionInput = {
@@ -168,6 +174,17 @@ export function appendAgentSessionEvent(
     timestamp: new Date().toISOString(),
     type: 'agent_event',
     payload: event,
+  });
+}
+
+export function appendAgentResponseItem(
+  session: AgentSession,
+  item: AgentResponseItem,
+): void {
+  appendAgentSessionRecord(session, {
+    timestamp: new Date().toISOString(),
+    type: 'response_item',
+    payload: item,
   });
 }
 

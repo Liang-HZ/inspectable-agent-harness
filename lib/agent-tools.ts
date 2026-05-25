@@ -5,6 +5,8 @@ import type { AgentToolAnnotations } from './agent-permissions';
 
 const INSPECT_TEXT_TOOL_NAME = 'inspect_text';
 
+export type AgentToolExecutionMode = 'sequential' | 'parallel';
+
 const inspectTextInputSchema = z.strictObject({
   text: z.string(),
 });
@@ -26,8 +28,12 @@ export type AgentToolResult = {
 export type AgentToolDefinition = {
   name: string;
   annotations: AgentToolAnnotations;
+  executionMode?: AgentToolExecutionMode;
   modelTool: AgentModelToolDefinition;
-  execute: (argumentsJson: string) => AgentToolResult;
+  execute: (
+    argumentsJson: string,
+    signal: AbortSignal | undefined,
+  ) => AgentToolResult | Promise<AgentToolResult>;
 };
 
 export type AgentToolExecution = {
@@ -35,6 +41,7 @@ export type AgentToolExecution = {
   toolName: string;
   input: unknown;
   result: unknown;
+  isError: boolean;
 };
 
 const inspectTextToolDefinition = {
@@ -45,6 +52,7 @@ const inspectTextToolDefinition = {
     openWorld: false,
     idempotent: true,
   },
+  executionMode: 'parallel',
   modelTool: {
     name: INSPECT_TEXT_TOOL_NAME,
     description:

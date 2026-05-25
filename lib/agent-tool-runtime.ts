@@ -46,6 +46,7 @@ function createToolFinishedEvent(execution: AgentToolExecution): AgentEvent {
     toolName: execution.toolName,
     input: execution.input,
     result: execution.result,
+    isError: execution.isError,
   };
 }
 
@@ -86,14 +87,19 @@ function createApprovalRequestedEvent(
   };
 }
 
-function readAgentToolDefinition(toolName: string): AgentToolDefinition {
-  const toolDefinition = agentToolRegistry.get(toolName);
-
-  if (toolDefinition === undefined) {
-    throw new Error(`Unknown agent tool: ${toolName}`);
-  }
-
-  return toolDefinition;
+function createErroredToolExecution(
+  toolCall: AgentModelToolCall,
+  error: unknown,
+): AgentToolExecution {
+  return {
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    input: {
+      argumentsJson: toolCall.argumentsJson,
+    },
+    result: error instanceof Error ? error.message : String(error),
+    isError: true,
+  };
 }
 
 function assertToolPermissionCanContinue(
@@ -109,11 +115,73 @@ function assertToolPermissionCanContinue(
   }
 }
 
-export function executeAgentToolCalls(
+export async function executeAgentToolCall(
+  toolCall: AgentModelToolCall,
+  context: AgentRunContext,
+  callbacks: AgentToolRuntimeCallbacks = {},
+): Promise<AgentToolExecution> {
+  assertAgentRunNotAborted(context);
+
+  const toolDefinition = agentToolRegistry.get(toolCall.name);
+
+  if (toolDefinition === undefined) {
+    const execution = createErroredToolExecution(
+      toolCall,
+      `Unknown agent tool: ${toolCall.name}`,
+    );
+    callbacks.onEvent?.(createToolFinishedEvent(execution));
+
+    return execution;
+  }
+
+  const permissionRequest = createPermissionRequest(
+    toolCall,
+    toolDefinition,
+    context,
+  );
+  const permissionDecision = decideAgentToolPermission(permissionRequest);
+  callbacks.onEvent?.(
+    createToolPermissionDecidedEvent(permissionRequest, permissionDecision),
+  );
+
+  if (permissionDecision.type === 'ask') {
+    callbacks.onEvent?.(
+      createApprovalRequestedEvent(permissionRequest, permissionDecision),
+    );
+  }
+
+  assertToolPermissionCanContinue(permissionRequest, permissionDecision);
+  assertAgentRunNotAborted(context);
+  callbacks.onEvent?.(createToolStartedEvent(toolCall));
+
+  let execution: AgentToolExecution;
+  try {
+    const toolResult = await toolDefinition.execute(
+      toolCall.argumentsJson,
+      context.signal,
+    );
+    execution = {
+      toolCallId: toolCall.id,
+      toolName: toolDefinition.name,
+      input: toolResult.input,
+      result: toolResult.result,
+      isError: false,
+    };
+  } catch (error) {
+    execution = createErroredToolExecution(toolCall, error);
+  }
+
+  assertAgentRunNotAborted(context);
+  callbacks.onEvent?.(createToolFinishedEvent(execution));
+
+  return execution;
+}
+
+export async function executeAgentToolCalls(
   toolCalls: AgentModelToolCall[],
   context: AgentRunContext,
   callbacks: AgentToolRuntimeCallbacks = {},
-): AgentToolExecution[] {
+): Promise<AgentToolExecution[]> {
   assertAgentRunNotAborted(context);
   callbacks.onEvent?.(createToolRequestEvent(toolCalls));
 
@@ -121,38 +189,11 @@ export function executeAgentToolCalls(
 
   for (const toolCall of toolCalls) {
     assertAgentRunNotAborted(context);
-
-    const toolDefinition = readAgentToolDefinition(toolCall.name);
-    const permissionRequest = createPermissionRequest(
+    const toolExecution = await executeAgentToolCall(
       toolCall,
-      toolDefinition,
       context,
+      callbacks,
     );
-    const permissionDecision = decideAgentToolPermission(permissionRequest);
-    callbacks.onEvent?.(
-      createToolPermissionDecidedEvent(permissionRequest, permissionDecision),
-    );
-
-    if (permissionDecision.type === 'ask') {
-      callbacks.onEvent?.(
-        createApprovalRequestedEvent(permissionRequest, permissionDecision),
-      );
-    }
-
-    assertToolPermissionCanContinue(permissionRequest, permissionDecision);
-    assertAgentRunNotAborted(context);
-    callbacks.onEvent?.(createToolStartedEvent(toolCall));
-
-    const toolResult = toolDefinition.execute(toolCall.argumentsJson);
-    const toolExecution: AgentToolExecution = {
-      toolCallId: toolCall.id,
-      toolName: toolDefinition.name,
-      input: toolResult.input,
-      result: toolResult.result,
-    };
-
-    assertAgentRunNotAborted(context);
-    callbacks.onEvent?.(createToolFinishedEvent(toolExecution));
     toolExecutions.push(toolExecution);
   }
 
