@@ -15,18 +15,18 @@ export function createEmptyAgentTokenUsage(): AgentTokenUsage {
   };
 }
 
-export function addAgentTokenUsage(
-  left: AgentTokenUsage,
-  right: AgentTokenUsage,
-): AgentTokenUsage {
-  return {
-    inputTokens: left.inputTokens + right.inputTokens,
-    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
-    outputTokens: left.outputTokens + right.outputTokens,
-    reasoningOutputTokens:
-      left.reasoningOutputTokens + right.reasoningOutputTokens,
-    totalTokens: left.totalTokens + right.totalTokens,
-  };
+function sumAgentTokenUsages(usages: AgentTokenUsage[]): AgentTokenUsage {
+  return usages.reduce(
+    (totalUsage, usage) => ({
+      inputTokens: totalUsage.inputTokens + usage.inputTokens,
+      cachedInputTokens: totalUsage.cachedInputTokens + usage.cachedInputTokens,
+      outputTokens: totalUsage.outputTokens + usage.outputTokens,
+      reasoningOutputTokens:
+        totalUsage.reasoningOutputTokens + usage.reasoningOutputTokens,
+      totalTokens: totalUsage.totalTokens + usage.totalTokens,
+    }),
+    createEmptyAgentTokenUsage(),
+  );
 }
 
 export function createAgentModelCallUsage(
@@ -42,7 +42,7 @@ export function createAgentModelCallUsage(
 }
 
 export function createAgentUsage(calls: AgentModelCallUsage[]): AgentUsage {
-  let totalTokenUsage = createEmptyAgentTokenUsage();
+  const callTokenUsages: AgentTokenUsage[] = [];
   let lastTokenUsage: AgentTokenUsage | null = null;
 
   for (const call of calls) {
@@ -50,12 +50,12 @@ export function createAgentUsage(calls: AgentModelCallUsage[]): AgentUsage {
       continue;
     }
 
-    totalTokenUsage = addAgentTokenUsage(totalTokenUsage, call.tokenUsage);
+    callTokenUsages.push(call.tokenUsage);
     lastTokenUsage = call.tokenUsage;
   }
 
   return {
-    totalTokenUsage: totalTokenUsage,
+    totalTokenUsage: sumAgentTokenUsages(callTokenUsages),
     lastTokenUsage: lastTokenUsage,
     calls: calls,
   };
