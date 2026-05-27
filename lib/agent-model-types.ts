@@ -22,11 +22,19 @@ export type AgentModelToolCall = {
   argumentsJson: string;
 };
 
+export type AgentModelProviderPhase = 'commentary' | 'final_answer';
+
+export type AgentModelAssistantMessage = {
+  text: string;
+  providerPhase: AgentModelProviderPhase | null;
+};
+
 export type AgentModelMessage =
   | {
       role: 'system' | 'user' | 'assistant';
       content: string;
       toolCalls?: AgentModelToolCall[];
+      providerPhase?: AgentModelProviderPhase | null;
     }
   | {
       role: 'tool';
@@ -57,6 +65,22 @@ export type AgentModelStreamEvent =
   | {
       type: 'text_delta';
       delta: string;
+    }
+  | {
+      type: 'tool_call_delta';
+      index: number | undefined;
+      itemId: string | undefined;
+      toolCallId: string | undefined;
+      name: string | undefined;
+      delta: string;
+    }
+  | {
+      type: 'tool_call_done';
+      toolCall: AgentModelToolCall;
+    }
+  | {
+      type: 'assistant_message_done';
+      message: AgentModelAssistantMessage;
     }
   | {
       type: 'completed';

@@ -21,7 +21,7 @@ export type AgentStep = z.infer<typeof agentStepSchema>;
 
 export const agentTokenUsageSchema = z.strictObject({
   inputTokens: z.number(),
-  cachedInputTokens: z.number(),
+  cachedInputTokens: z.number().nullable(),
   outputTokens: z.number(),
   reasoningOutputTokens: z.number(),
   totalTokens: z.number(),
@@ -60,7 +60,7 @@ export type AgentStreamEvent =
       step: AgentStep;
     }
   | {
-      type: 'answerDelta';
+      type: 'assistantDelta';
       delta: string;
     }
   | {

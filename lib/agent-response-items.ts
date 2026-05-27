@@ -1,14 +1,22 @@
 import type {
+  AgentModelAssistantMessage,
   AgentModelMessage,
+  AgentModelProviderPhase,
   AgentModelResponse,
   AgentModelToolCall,
 } from './agent-model-types';
+
+export type AgentAssistantMessageRuntimeRole =
+  | 'working_message'
+  | 'final_response';
 
 export type AgentResponseItem =
   | {
       type: 'message';
       role: 'system' | 'user' | 'assistant';
       content: string;
+      providerPhase?: AgentModelProviderPhase | null;
+      runtimeRole?: AgentAssistantMessageRuntimeRole;
     }
   | {
       type: 'function_call';
@@ -45,6 +53,16 @@ function appendFunctionCallToMessages(
   });
 }
 
+function toModelMessage(
+  item: Extract<AgentResponseItem, { type: 'message' }>,
+): AgentModelMessage {
+  return {
+    role: item.role,
+    content: item.content,
+    providerPhase: item.role === 'assistant' ? item.providerPhase : undefined,
+  };
+}
+
 function serializeFunctionCallOutput(
   item: Extract<AgentResponseItem, { type: 'function_call_output' }>,
 ): string {
@@ -65,10 +83,7 @@ export function responseItemsToModelMessages(
 
   for (const item of items) {
     if (item.type === 'message') {
-      messages.push({
-        role: item.role,
-        content: item.content,
-      });
+      messages.push(toModelMessage(item));
       continue;
     }
 
@@ -89,6 +104,24 @@ export function responseItemsToModelMessages(
   }
 
   return messages;
+}
+
+export function createCommittedAssistantMessageItems(
+  messages: AgentModelAssistantMessage[],
+  runtimeRole: AgentAssistantMessageRuntimeRole,
+): AgentResponseItem[] {
+  return messages
+    .filter(
+      (message) =>
+        runtimeRole === 'working_message' || message.text.trim() !== '',
+    )
+    .map((message) => ({
+      type: 'message',
+      role: 'assistant',
+      content: message.text,
+      providerPhase: message.providerPhase,
+      runtimeRole: runtimeRole,
+    }));
 }
 
 export function createAssistantResponseItems(

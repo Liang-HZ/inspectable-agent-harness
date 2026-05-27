@@ -97,13 +97,15 @@ stream contract:
 
 ```text
 step_created -> step
-model_delta  -> answerDelta
+assistant_delta -> assistantDelta
 run_succeeded -> done
 run_failed -> error
 ```
 
 This preserved a simple frontend contract while allowing the backend to start
-using richer internal events.
+using richer internal events. The stream event is named `assistantDelta` because
+the text is assistant output, not proof that the current message is already the
+final answer.
 
 Important decision:
 
@@ -336,7 +338,7 @@ the runtime should become stronger before another provider is added.
 
 ## Phase 13: Agent Runtime Spine v1
 
-The fixed two-call agent has been replaced by the first real runtime spine:
+The fixed two-call agent was replaced by the first real runtime spine:
 
 ```text
 initialize provider-neutral history
@@ -398,6 +400,81 @@ This phase connects the existing infrastructure:
 - usage tracking
 - future approval resume
 - future compaction/resume
+
+## Phase 14: Streaming Sampling Loop v1
+
+The runtime spine now uses streaming model sampling for every round:
+
+```text
+initialize provider-neutral history
+stream model with history and tools
+collect text_delta / assistant_message_done / tool_call_delta / tool_call_done / completed
+if tool calls exist:
+  record function_call items
+  execute one batch of tools
+  record function_call_output items
+  continue with the updated history
+else:
+  use this round's streamed text as the final answer
+```
+
+This removed the extra final-answer model call. The last round that does not
+request tools is the final answer stream.
+
+The provider-neutral stream event now includes tool-call events:
+
+```ts
+type AgentModelStreamEvent =
+  | { type: 'text_delta'; delta: string }
+  | { type: 'tool_call_delta'; ... }
+  | { type: 'tool_call_done'; toolCall: AgentModelToolCall }
+  | { type: 'completed'; model: string; usage: AgentModelUsageSnapshot };
+```
+
+OpenAI Chat Completions reconstructs streaming tool calls from
+`delta.tool_calls`. OpenAI Responses emits function-call deltas from
+`response.function_call_arguments.delta` and completed tool calls from
+`response.output_item.done`.
+
+## Phase 15: Assistant Message Commit Semantics
+
+The streaming loop now separates three concepts that were previously blended
+together:
+
+```text
+text_delta                 provisional assistant text for live display
+assistant_message_done     commit point for one complete assistant message
+round decision             continue only if this round has tool_call_done events
+```
+
+Provider dialects own the conversion from native stream events to this contract:
+
+```text
+OpenAI Chat Completions:
+  delta.content -> text_delta
+  stream completion -> assistant_message_done
+  delta.tool_calls + finish_reason/tool-call tail -> tool_call_done
+
+OpenAI Responses:
+  response.output_text.delta -> text_delta
+  response.output_item.done(message) -> assistant_message_done
+  response.output_item.done(function_call) -> tool_call_done
+```
+
+The agent loop waits until a sampling round has completed before deciding what
+the committed assistant message means:
+
+```text
+if tool_call_done events exist:
+  committed assistant messages are working messages
+  execute tools and continue
+else:
+  committed assistant text is the final answer
+```
+
+OpenAI Responses `phase` is preserved as provider metadata when present, but it
+does not drive the loop. The loop stop condition remains provider-neutral:
+whether the completed round requested tools.
 
 ## Deferred Work
 

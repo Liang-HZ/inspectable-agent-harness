@@ -126,7 +126,7 @@ type WorkbenchAction =
       step: AgentStep;
     }
   | {
-      type: 'agentAnswerDeltaReceived';
+      type: 'agentAssistantDeltaReceived';
       delta: string;
     }
   | {
@@ -337,7 +337,7 @@ function workbenchReducer(
         },
       };
 
-    case 'agentAnswerDeltaReceived':
+    case 'agentAssistantDeltaReceived':
       if (state.agentView.status !== 'streaming') {
         return state;
       }
@@ -851,13 +851,13 @@ export function ChatPlayground() {
               step: event.step,
             });
           },
-          onAnswerDelta: (event) => {
+          onAssistantDelta: (event) => {
             if (!canUpdateCurrentRun()) {
               return;
             }
 
             dispatch({
-              type: 'agentAnswerDeltaReceived',
+              type: 'agentAssistantDeltaReceived',
               delta: event.delta,
             });
           },

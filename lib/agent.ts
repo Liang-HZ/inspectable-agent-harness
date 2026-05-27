@@ -4,6 +4,7 @@ import type {
   AgentStep,
 } from './agent-api-types';
 import type {
+  AgentModelAssistantMessage,
   AgentModelToolCall,
   AgentModelUsageSnapshot,
 } from './agent-model-types';
@@ -37,6 +38,7 @@ import {
 } from './model-gateway';
 import { createAgentModelCallUsage, createAgentUsage } from './agent-usage';
 import {
+  createCommittedAssistantMessageItems,
   createAssistantResponseItems,
   responseItemsToModelMessages,
   type AgentResponseItem,
@@ -44,6 +46,22 @@ import {
 
 type RunAgentStreamCallbacks = {
   onEvent: (event: AgentEvent) => void;
+};
+
+type SamplingLoopResult = {
+  model: string;
+  answer: string;
+  finalCallUsage: AgentModelCallUsage;
+  usedTool: boolean;
+};
+
+type SamplingRoundResult = {
+  model: string;
+  streamedAssistantText: string;
+  assistantMessages: AgentModelAssistantMessage[];
+  toolCalls: AgentModelToolCall[];
+  usage: AgentModelUsageSnapshot;
+  sawToolCallDelta: boolean;
 };
 
 const AGENT_SYSTEM_MESSAGE =
@@ -193,84 +211,103 @@ function appendExistingResponseItemsToSession(
   }
 }
 
-function createAssistantFinalAnswerItem(answer: string): AgentResponseItem {
-  return {
-    type: 'message',
-    role: 'assistant',
-    content: answer,
-  };
+function readCommittedAssistantText(
+  messages: AgentModelAssistantMessage[],
+): string {
+  return messages.map((message) => message.text).join('');
 }
 
-async function streamFinalAnswer(
+function assertNoIncompleteToolCall(roundResult: SamplingRoundResult): void {
+  if (roundResult.sawToolCallDelta && roundResult.toolCalls.length === 0) {
+    throw new Error(
+      'Model streamed tool-call arguments but did not complete a tool call.',
+    );
+  }
+}
+
+function assertCommittedAssistantMessage(
+  roundResult: SamplingRoundResult,
+): void {
+  if (
+    roundResult.streamedAssistantText !== '' &&
+    roundResult.assistantMessages.length === 0
+  ) {
+    throw new Error(
+      'Model streamed assistant text but did not commit an assistant message.',
+    );
+  }
+}
+
+async function runSamplingRound(
   modelGateway: AgentModelGateway,
   input: AgentInput,
+  context: AgentRunContext,
   history: AgentResponseItem[],
-  session: AgentSession | undefined,
-  emitAgentEvent: (event: AgentEvent) => void,
-): Promise<{
-  model: string;
-  answer: string;
-  usage: AgentModelCallUsage;
-}> {
-  emitAgentEvent({
-    type: 'model_started',
-    stage: 'answer_generation',
-  });
-
+  emitAgentEvent: ((event: AgentEvent) => void) | undefined,
+): Promise<SamplingRoundResult> {
   const stream = await modelGateway.streamResponse({
     messages: responseItemsToModelMessages(history),
-    tools: [],
-    toolChoice: 'none',
+    tools: agentTools,
+    toolChoice: 'auto',
     temperature: input.temperature,
   });
 
-  let answer = '';
+  let streamedAssistantText = '';
   let model = modelGateway.model;
   let usage: AgentModelUsageSnapshot = {
     tokenUsage: null,
     rawUsage: null,
   };
+  let sawToolCallDelta = false;
+  const assistantMessages: AgentModelAssistantMessage[] = [];
+  const toolCalls: AgentModelToolCall[] = [];
 
   for await (const event of stream) {
-    if (event.type === 'completed') {
-      model = event.model;
-      usage = event.usage;
-      continue;
+    assertAgentRunNotAborted(context);
+
+    switch (event.type) {
+      case 'completed':
+        model = event.model;
+        usage = event.usage;
+        break;
+
+      case 'assistant_message_done':
+        assistantMessages.push(event.message);
+        break;
+
+      case 'tool_call_done':
+        toolCalls.push(event.toolCall);
+        break;
+
+      case 'tool_call_delta':
+        sawToolCallDelta = true;
+        break;
+
+      case 'text_delta':
+        if (event.delta === '') {
+          break;
+        }
+
+        streamedAssistantText += event.delta;
+        emitAgentEvent?.({
+          type: 'assistant_delta',
+          delta: event.delta,
+        });
+        break;
     }
-
-    if (event.delta === '') {
-      continue;
-    }
-
-    answer += event.delta;
-    emitAgentEvent({
-      type: 'model_delta',
-      delta: event.delta,
-    });
   }
-
-  if (answer.trim() === '') {
-    throw new Error('Model returned an empty agent answer.');
-  }
-
-  appendResponseItems(
-    history,
-    [createAssistantFinalAnswerItem(answer)],
-    session,
-  );
 
   return {
     model: model,
-    answer: answer,
-    usage: createAgentModelCallUsage(
-      'answer_generation',
-      usage.tokenUsage,
-      usage.rawUsage,
-    ),
+    streamedAssistantText: streamedAssistantText,
+    assistantMessages: assistantMessages,
+    toolCalls: toolCalls,
+    usage: usage,
+    sawToolCallDelta: sawToolCallDelta,
   };
 }
 
-async function runToolLoop(
+async function runSamplingLoop(
   modelGateway: AgentModelGateway,
   input: AgentInput,
   context: AgentRunContext,
@@ -279,7 +316,7 @@ async function runToolLoop(
   modelCallUsages: AgentModelCallUsage[],
   session: AgentSession | undefined,
   emitAgentEvent: ((event: AgentEvent) => void) | undefined,
-): Promise<boolean> {
+): Promise<SamplingLoopResult> {
   let usedTool = false;
 
   for (let round = 1; round <= MAX_AGENT_ROUNDS; round += 1) {
@@ -289,39 +326,71 @@ async function runToolLoop(
       stage: 'tool_or_answer_selection',
     });
 
-    const modelResponse = await modelGateway.createResponse({
-      messages: responseItemsToModelMessages(history),
-      tools: agentTools,
-      toolChoice: 'auto',
-      temperature: input.temperature,
-    });
+    const roundResult = await runSamplingRound(
+      modelGateway,
+      input,
+      context,
+      history,
+      emitAgentEvent,
+    );
+    assertNoIncompleteToolCall(roundResult);
+    assertCommittedAssistantMessage(roundResult);
+
     const modelCallUsage = createAgentModelCallUsage(
       'tool_or_answer_selection',
-      modelResponse.usage.tokenUsage,
-      modelResponse.usage.rawUsage,
+      roundResult.usage.tokenUsage,
+      roundResult.usage.rawUsage,
     );
     modelCallUsages.push(modelCallUsage);
 
-    if (modelResponse.toolCalls.length === 0) {
-      return usedTool;
+    if (roundResult.toolCalls.length === 0) {
+      const answer = readAssistantAnswer(
+        readCommittedAssistantText(roundResult.assistantMessages),
+      );
+      appendResponseItems(
+        history,
+        createCommittedAssistantMessageItems(
+          roundResult.assistantMessages,
+          'final_response',
+        ),
+        session,
+      );
+
+      return {
+        model: roundResult.model,
+        answer: answer,
+        finalCallUsage: modelCallUsage,
+        usedTool: usedTool,
+      };
     }
 
     usedTool = true;
     appendResponseItems(
       history,
-      createAssistantResponseItems(modelResponse),
+      [
+        ...createCommittedAssistantMessageItems(
+          roundResult.assistantMessages,
+          'working_message',
+        ),
+        ...createAssistantResponseItems({
+          model: roundResult.model,
+          text: '',
+          toolCalls: roundResult.toolCalls,
+          usage: roundResult.usage,
+        }),
+      ],
       session,
     );
 
     const toolBatch = await executeAgentToolBatch(
-      modelResponse.toolCalls,
+      roundResult.toolCalls,
       context,
       {
         onEvent: emitAgentEvent,
       },
     );
     const toolStep = createToolStep(
-      modelResponse.toolCalls,
+      roundResult.toolCalls,
       toolBatch.toolExecutions,
       toolBatch.executionMode,
       round,
@@ -367,7 +436,7 @@ export async function runAgent(
     promptLength: prompt.length,
   });
 
-  const usedTool = await runToolLoop(
+  const samplingResult = await runSamplingLoop(
     modelGateway,
     input,
     context,
@@ -377,45 +446,27 @@ export async function runAgent(
     undefined,
     undefined,
   );
-  const finalResponse = await modelGateway.createResponse({
-    messages: responseItemsToModelMessages(history),
-    tools: [],
-    toolChoice: 'none',
-    temperature: input.temperature,
-  });
-
-  const finalAnswer = readAssistantAnswer(finalResponse.text);
-  const finalCallUsage = createAgentModelCallUsage(
-    'answer_generation',
-    finalResponse.usage.tokenUsage,
-    finalResponse.usage.rawUsage,
-  );
   const finalStep = createFinalAnswerStep(
-    finalResponse.model,
-    finalAnswer,
-    finalCallUsage,
+    samplingResult.model,
+    samplingResult.answer,
+    samplingResult.finalCallUsage,
     steps.length + 1,
-    usedTool,
+    samplingResult.usedTool,
   );
   steps.push(finalStep);
   logAgentStep(context.runId, finalStep);
-  appendResponseItems(
-    history,
-    [createAssistantFinalAnswerItem(finalAnswer)],
-    undefined,
-  );
   logAgentInfo(context.runId, 'model_answer_received', {
-    answer: finalAnswer,
-    answerLength: finalAnswer.length,
-    model: finalResponse.model,
-    hasUsage: finalResponse.usage.tokenUsage !== null,
+    answer: samplingResult.answer,
+    answerLength: samplingResult.answer.length,
+    model: samplingResult.model,
+    hasUsage: samplingResult.finalCallUsage.tokenUsage !== null,
   });
 
   return {
-    model: finalResponse.model,
-    answer: finalAnswer,
+    model: samplingResult.model,
+    answer: samplingResult.answer,
     steps: steps,
-    usage: createAgentUsage([...modelCallUsages, finalCallUsage]),
+    usage: createAgentUsage(modelCallUsages),
   };
 }
 
@@ -481,7 +532,7 @@ export async function runAgentStream(
   });
 
   appendExistingResponseItemsToSession(history, session);
-  const usedTool = await runToolLoop(
+  const samplingResult = await runSamplingLoop(
     modelGateway,
     input,
     context,
@@ -491,19 +542,12 @@ export async function runAgentStream(
     session,
     emitAgentEvent,
   );
-  const finalAnswer = await streamFinalAnswer(
-    modelGateway,
-    input,
-    history,
-    session,
-    emitAgentEvent,
-  );
   const finalStep = createFinalAnswerStep(
-    finalAnswer.model,
-    finalAnswer.answer,
-    finalAnswer.usage,
+    samplingResult.model,
+    samplingResult.answer,
+    samplingResult.finalCallUsage,
     steps.length + 1,
-    usedTool,
+    samplingResult.usedTool,
   );
   steps.push(finalStep);
   emitAgentEvent({
@@ -512,16 +556,16 @@ export async function runAgentStream(
   });
   logAgentStep(context.runId, finalStep);
   logAgentInfo(context.runId, 'model_answer_received', {
-    answer: finalAnswer.answer,
-    answerLength: finalAnswer.answer.length,
-    model: finalAnswer.model,
-    hasUsage: finalAnswer.usage.tokenUsage !== null,
+    answer: samplingResult.answer,
+    answerLength: samplingResult.answer.length,
+    model: samplingResult.model,
+    hasUsage: samplingResult.finalCallUsage.tokenUsage !== null,
   });
 
-  const usage = createAgentUsage([...modelCallUsages, finalAnswer.usage]);
+  const usage = createAgentUsage(modelCallUsages);
   const result = {
-    model: finalAnswer.model,
-    answer: finalAnswer.answer,
+    model: samplingResult.model,
+    answer: samplingResult.answer,
     steps: steps,
     usage: usage,
   };

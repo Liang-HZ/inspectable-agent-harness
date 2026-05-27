@@ -109,7 +109,7 @@ lib/agent.ts                        Tool-using agent orchestration service
 - success/error display state
 - calls to `requestChatCompletion(...)`
 - calls to `requestAgentRunStream(...)`
-- reducer actions for streamed agent steps and answer deltas
+- reducer actions for streamed agent steps and assistant deltas
 
 It should not read `process.env`, create an OpenAI SDK client, or know how the
 server talks to the model provider.
@@ -155,7 +155,8 @@ inside route handlers.
 boundary, then returns Server-Sent Events:
 
 - `step` events append inspectable agent steps
-- `answerDelta` events stream final answer text
+- `assistantDelta` events stream assistant text; the runtime cannot know whether
+  a streamed message is final until the sampling round ends
 - `done` events carry the final `AgentResult`
 - `error` events carry stream-time failures
 
@@ -179,11 +180,13 @@ a plain `ChatResult`.
 
 `lib/agent.ts` owns the first agent orchestration path.
 
-It receives `AgentInput` and `ModelConfig`, builds a model prompt, asks the
-model whether it needs a local tool, executes requested tools, asks the model
-for a final answer when a tool was used, and returns a plain `AgentResult` with
-inspectable steps. It should coordinate agent steps and lifecycle checks rather
-than directly create SDK clients or pass SDK request options.
+It receives `AgentInput` and `ModelConfig`, builds a model prompt, runs
+provider-neutral streaming sampling rounds, executes requested tools, and
+returns a plain `AgentResult` with inspectable steps. A round that commits
+assistant text and requests no tools is the final answer round. There is no
+extra final-answer model call after the tool loop. The service should
+coordinate agent steps and lifecycle checks rather than directly create SDK
+clients or pass SDK request options.
 
 `lib/agent-run-context.ts` owns per-run lifecycle context.
 
@@ -202,16 +205,17 @@ sandboxing.
 
 `AgentEvent` is the runtime truth for what happened during a run. `AgentStep`
 is still the current frontend-friendly display projection. `lib/agent.ts`
-emits internal events such as `run_started`, `model_started`, `model_delta`,
-`tool_requested`, `tool_started`, `tool_finished`, `step_created`, and
-`run_succeeded`. The streaming route sends frontend SSE events by projecting
-these runtime events through `lib/agent-stream-projection.ts`.
+emits internal events such as `run_started`, `model_started`,
+`assistant_delta`, `tool_requested`, `tool_started`, `tool_finished`,
+`step_created`, and `run_succeeded`. The streaming route sends frontend SSE
+events by projecting these runtime events through
+`lib/agent-stream-projection.ts`.
 
-`lib/agent-stream-projection.ts` owns the compatibility layer from runtime
-events to the current browser stream contract:
+`lib/agent-stream-projection.ts` owns the projection from runtime events to the
+browser stream contract:
 
 - `step_created` becomes `step`
-- `model_delta` becomes `answerDelta`
+- `assistant_delta` becomes `assistantDelta`
 - `run_succeeded` becomes `done`
 - `run_failed` becomes `error`
 
@@ -238,7 +242,6 @@ AgentModelMessage;
 AgentModelToolDefinition;
 AgentModelToolCall;
 AgentModelRequest;
-AgentModelResponse;
 AgentModelStreamEvent;
 ```
 
@@ -250,8 +253,38 @@ database's SQL.
 `lib/model-provider-dialect.ts` owns the provider dialect contract.
 
 A dialect is responsible for compiling the agent model IR into one wire API and
-parsing provider output back into provider-neutral responses/events. The current
-dialects are:
+parsing provider output back into provider-neutral responses and stream events.
+The agent loop consumes the stream event contract for every sampling round:
+
+```ts
+type AgentModelStreamEvent =
+  | { type: 'text_delta'; delta: string }
+  | {
+      type: 'assistant_message_done';
+      message: {
+        text: string;
+        providerPhase: 'commentary' | 'final_answer' | null;
+      };
+    }
+  | {
+      type: 'tool_call_delta';
+      index: number | undefined;
+      itemId: string | undefined;
+      toolCallId: string | undefined;
+      name: string | undefined;
+      delta: string;
+    }
+  | { type: 'tool_call_done'; toolCall: AgentModelToolCall }
+  | { type: 'completed'; model: string; usage: AgentModelUsageSnapshot };
+```
+
+`text_delta` is provisional display text. `assistant_message_done` is the commit
+point for one assistant message. `tool_call_done` is the only signal that makes
+the agent continue to tools. Provider metadata such as OpenAI Responses
+`phase: "commentary" | "final_answer"` is preserved on committed assistant
+messages when present, but the core loop does not use it as the stop condition.
+
+The current dialects are:
 
 ```text
 openai-chat-completions  lib/openai-chat-completions-dialect.ts
@@ -283,7 +316,7 @@ agent normalizes those raw values into:
 ```ts
 type AgentTokenUsage = {
   inputTokens: number;
-  cachedInputTokens: number;
+  cachedInputTokens: number | null;
   outputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
@@ -301,15 +334,21 @@ type AgentUsage = {
 };
 ```
 
-The runtime only sums calls that include token usage. Each call still keeps
-`rawUsage` so provider-specific fields are not lost.
+`cachedInputTokens` is nullable by design. `0` means the provider explicitly
+reported zero cached input tokens. `null` means the provider did not report the
+cache-hit field, so the runtime does not know whether cache was used. When
+aggregating calls, any unknown cached-token value makes the aggregate
+`cachedInputTokens` unknown as well. The runtime only sums calls that include
+token usage. Each call still keeps `rawUsage` so provider-specific fields are
+not lost.
 
 `lib/agent-session-store.ts` owns JSONL session rollout files.
 
 It writes inspectable append-only session records for streaming agent runs. Each
 line is a JSON object with `timestamp`, `type`, and `payload`. The first line is
 `session_meta`, the second line is the current `turn_context`, and subsequent
-`agent_event` lines mirror the runtime event stream emitted by `lib/agent.ts`.
+`agent_event` rows mirror runtime events while `response_item` rows persist the
+model-visible history emitted by `lib/agent.ts`.
 
 Current files are written under:
 
@@ -319,8 +358,8 @@ data/agent-sessions/YYYY/MM/DD/rollout-{timestamp}-{runId}.jsonl
 
 `data/agent-sessions/` is ignored by git because session files can contain user
 input, prompts, tool arguments, model output, and other sensitive runtime data.
-This module is currently used by `/api/agent/stream`; `/api/agent` can be wired
-to the same store after the non-streaming path emits `AgentEvent`.
+This module is currently used by `/api/agent/stream`; `/api/agent` still runs
+the same model-history loop without persisting a session file.
 
 `app/api/agent/sessions/route.ts` exposes `GET /api/agent/sessions`.
 
@@ -335,9 +374,11 @@ records. This is an inspect/debug API only. It does not resume a run and does
 not reconstruct model-visible history.
 
 For `model_started`, the `stage` field describes why the model call is starting.
-`tool_or_answer_selection` means the agent is asking the model to choose whether
-to answer directly or request a tool. `answer_generation` means the agent is
-asking the model to generate the final answer text.
+The current streaming sampling loop uses `tool_or_answer_selection` because each
+round lets the model either answer directly or request tools. `answer_generation`
+is kept in the shared enum for earlier session records and future no-tool-only
+answer calls, but the current agent runtime no longer performs a separate final
+answer model call.
 
 `AgentRunState` is a small derived state object built by applying events in
 order. It is not persistent yet. Its purpose is to make future cancellation,
@@ -419,13 +460,17 @@ lib/model-gateway.ts                Provider dialect selection and model call bo
 lib/agent.ts                        Agent orchestration service
 ```
 
-This version has the first real agent runtime spine. The model-visible history
-is represented by provider-neutral `AgentResponseItem` records. The runtime can
-call the model for tool selection, record function calls, execute a batch of
-tools, record function-call outputs, and continue the loop until the model no
-longer asks for tools or the max-round guard is reached. In the UI, steps arrive
-as soon as the backend emits them, and final answer text arrives as
-`answerDelta` events:
+This version has the first streaming agent sampling loop with assistant message
+commit semantics. The model-visible history is represented by provider-neutral
+`AgentResponseItem` records. Every model sampling round uses `streamResponse`,
+so the runtime can receive provisional assistant text deltas, assistant message
+commit events, tool-call argument deltas, completed tool calls, and final usage
+through one provider-neutral stream. If a completed round contains tool calls,
+the runtime records any committed assistant messages as working messages,
+records the function calls, executes the tool batch, records function-call
+outputs, and continues. If a completed round contains no tool calls, the
+committed assistant message text is the final answer. There is no extra
+final-answer model call.
 
 ```mermaid
 flowchart TD
@@ -440,23 +485,29 @@ flowchart TD
   ModelDialect --> ResponsesDialect[OpenAI Responses dialect]
   AgentService --> ToolScheduler[lib/agent-tool-scheduler.ts]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
-  AgentService --> ToolLoop[Multi-round tool loop]
-  ToolLoop --> ResponseItems
-  ToolLoop --> ModelGateway
-  ToolLoop --> ToolScheduler
+  AgentService --> SamplingLoop[Streaming sampling loop]
+  SamplingLoop --> ResponseItems
+  SamplingLoop --> ModelGateway
+  ModelGateway --> StreamEvents[AgentModelStreamEvent]
+  StreamEvents --> SamplingLoop
+  SamplingLoop --> ToolScheduler
   ToolScheduler --> ToolRuntime
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
   AgentTools --> ResponseItems
-  ResponseItems --> FinalCall[Final answer model call]
-  ModelGateway --> FinalCall
-  FinalCall --> AgentResponse
+  SamplingLoop --> AgentResponse[Final answer plus steps]
 ```
 
 `AgentResponseItem` currently has three variants:
 
 ```ts
 type AgentResponseItem =
-  | { type: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
+  | {
+      type: 'message';
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      providerPhase?: 'commentary' | 'final_answer' | null;
+      runtimeRole?: 'working_message' | 'final_response';
+    }
   | {
       type: 'function_call';
       callId: string;
@@ -474,7 +525,10 @@ type AgentResponseItem =
 
 `lib/agent-response-items.ts` converts this history into
 `AgentModelMessage[]` before handing it to the selected provider dialect.
-Provider wire details remain inside the dialect files.
+Provider wire details remain inside the dialect files. `providerPhase` is
+provider metadata that may be useful for Responses-compatible models. It is not
+the agent loop stop condition. `runtimeRole` records how the agent loop
+classified a committed assistant message after the sampling round completed.
 
 Tool batching is handled by `lib/agent-tool-scheduler.ts`:
 
@@ -532,13 +586,28 @@ sequenceDiagram
   Route-->>Client: SSE step
   Client-->>UI: onStep(event)
   UI->>UI: dispatch(agentStepReceived)
-  loop Tool rounds until no tool calls or max rounds
-    Agent->>Gateway: Provider-neutral tool-selection request with history and tools
-    Gateway->>Model: Dialect-compiled model request with signal
-    Model-->>Gateway: assistant text and/or tool calls
-    Gateway-->>Agent: AgentModelResponse
+  loop Streaming sampling rounds until no tool calls or max rounds
+    Agent->>Gateway: Provider-neutral stream request with history and tools
+    Gateway->>Model: Dialect-compiled streaming model request with signal
+    loop Provider-neutral model stream
+      Model-->>Gateway: text delta / message done / tool call delta / completed
+      Gateway-->>Agent: AgentModelStreamEvent
+      alt text_delta
+        Agent-->>Route: AgentEvent assistant_delta
+        Route->>Projection: projectAgentEventToStreamEvent(event)
+        Route-->>Client: SSE assistantDelta
+        Client-->>UI: onAssistantDelta(event)
+        UI->>UI: dispatch(agentAssistantDeltaReceived)
+      else assistant_message_done
+        Agent->>Agent: commit assistant message for this round
+      else tool_call_done
+        Agent->>Agent: collect tool call for this round
+      else completed
+        Agent->>Agent: record model and usage for this round
+      end
+    end
     alt Model requests tools
-      Agent->>History: append function_call response_item records
+      Agent->>History: append working assistant message and function_call response_item records
       Agent->>Scheduler: executeAgentToolBatch(toolCalls)
       Scheduler->>ToolRuntime: executeAgentToolCall(...)
       ToolRuntime->>Tools: execute concrete tool handler
@@ -552,18 +621,9 @@ sequenceDiagram
       Client-->>UI: onStep(event)
       UI->>UI: dispatch(agentStepReceived)
     else No tool calls
-      Agent->>Agent: exit tool loop
+      Agent->>History: append final assistant message response_item
+      Agent->>Agent: finish with this round's committed assistant text
     end
-  end
-  Agent->>Gateway: Stream final answer with accumulated history
-  loop Model answer chunks
-    Model-->>Gateway: delta
-    Gateway-->>Agent: guarded delta
-    Agent-->>Route: AgentEvent model_delta
-    Route->>Projection: projectAgentEventToStreamEvent(event)
-    Route-->>Client: SSE answerDelta
-    Client-->>UI: onAnswerDelta(event)
-    UI->>UI: dispatch(agentAnswerDeltaReceived)
   end
   Agent-->>Route: AgentEvent run_succeeded
   Route->>Projection: projectAgentEventToStreamEvent(event)
@@ -577,7 +637,7 @@ State ownership in the React component is intentionally narrow:
 
 - `agentSubmitStarted` switches `agentView` to `streaming` and clears old output.
 - `agentStepReceived` appends one `AgentStep` to `agentView.steps`.
-- `agentAnswerDeltaReceived` appends text to `agentView.answer`.
+- `agentAssistantDeltaReceived` appends text to `agentView.answer`.
 - `agentRunAborted` preserves already received steps and answer text, then marks
   the run as `aborted`.
 - `agentSubmitFinished` replaces the temporary streaming state with the final

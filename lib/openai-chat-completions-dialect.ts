@@ -37,7 +37,7 @@ function normalizeChatCompletionUsage(
 
   return {
     inputTokens: usage.prompt_tokens,
-    cachedInputTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,
+    cachedInputTokens: usage.prompt_tokens_details?.cached_tokens ?? null,
     outputTokens: usage.completion_tokens,
     reasoningOutputTokens:
       usage.completion_tokens_details?.reasoning_tokens ?? 0,
@@ -169,6 +169,14 @@ function readChatCompletionText(message: ChatCompletionMessage): string {
   return message.content;
 }
 
+function presentString(value: string | null | undefined): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  return value;
+}
+
 function toAgentModelResponse(completion: ChatCompletion): AgentModelResponse {
   const message = completion.choices[0]?.message;
 
@@ -190,6 +198,38 @@ async function* mapChatCompletionStream(
 ): AsyncIterable<AgentModelStreamEvent> {
   let model = fallbackModel;
   let usage: CompletionUsage | null = null;
+  let assistantText = '';
+  const toolCallParts = new Map<
+    number,
+    {
+      id: string | undefined;
+      name: string | undefined;
+      argumentsJson: string;
+    }
+  >();
+  let emittedToolCalls = false;
+
+  function completedToolCalls(): AgentModelToolCall[] {
+    return [...toolCallParts.entries()]
+      .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+      .map(([, toolCallPart]) => {
+        if (toolCallPart.id === undefined) {
+          throw new Error('Model streamed a tool call without an id.');
+        }
+
+        if (toolCallPart.name === undefined) {
+          throw new Error(
+            'Model streamed a tool call without a function name.',
+          );
+        }
+
+        return {
+          id: toolCallPart.id,
+          name: toolCallPart.name,
+          argumentsJson: toolCallPart.argumentsJson,
+        };
+      });
+  }
 
   for await (const chunk of stream) {
     model = chunk.model ?? model;
@@ -198,15 +238,74 @@ async function* mapChatCompletionStream(
       usage = chunk.usage;
     }
 
-    const delta = chunk.choices[0]?.delta.content;
-    if (delta === undefined || delta === null || delta === '') {
-      continue;
+    const choice = chunk.choices[0];
+    const contentDelta = choice?.delta.content;
+    if (
+      contentDelta !== undefined &&
+      contentDelta !== null &&
+      contentDelta !== ''
+    ) {
+      assistantText += contentDelta;
+      yield {
+        type: 'text_delta',
+        delta: contentDelta,
+      };
     }
 
-    yield {
-      type: 'text_delta',
-      delta: delta,
-    };
+    for (const toolCallDelta of choice?.delta.tool_calls ?? []) {
+      const current = toolCallParts.get(toolCallDelta.index) ?? {
+        id: undefined,
+        name: undefined,
+        argumentsJson: '',
+      };
+      const id = presentString(toolCallDelta.id) ?? current.id;
+      const name = presentString(toolCallDelta.function?.name) ?? current.name;
+      const argumentsDelta = toolCallDelta.function?.arguments ?? '';
+
+      toolCallParts.set(toolCallDelta.index, {
+        id: id,
+        name: name,
+        argumentsJson: current.argumentsJson + argumentsDelta,
+      });
+
+      if (argumentsDelta !== '') {
+        yield {
+          type: 'tool_call_delta',
+          index: toolCallDelta.index,
+          itemId: undefined,
+          toolCallId: id,
+          name: name,
+          delta: argumentsDelta,
+        };
+      }
+    }
+
+    if (choice?.finish_reason === 'tool_calls' && !emittedToolCalls) {
+      for (const toolCall of completedToolCalls()) {
+        yield {
+          type: 'tool_call_done',
+          toolCall: toolCall,
+        };
+      }
+      emittedToolCalls = true;
+    }
+  }
+
+  yield {
+    type: 'assistant_message_done',
+    message: {
+      text: assistantText,
+      providerPhase: null,
+    },
+  };
+
+  if (toolCallParts.size > 0 && !emittedToolCalls) {
+    for (const toolCall of completedToolCalls()) {
+      yield {
+        type: 'tool_call_done',
+        toolCall: toolCall,
+      };
+    }
   }
 
   yield {

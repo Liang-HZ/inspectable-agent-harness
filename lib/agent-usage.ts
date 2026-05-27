@@ -15,11 +15,25 @@ export function createEmptyAgentTokenUsage(): AgentTokenUsage {
   };
 }
 
+function sumNullableTokenCounts(
+  totalValue: number | null,
+  nextValue: number | null,
+): number | null {
+  if (totalValue === null || nextValue === null) {
+    return null;
+  }
+
+  return totalValue + nextValue;
+}
+
 function sumAgentTokenUsages(usages: AgentTokenUsage[]): AgentTokenUsage {
   return usages.reduce(
     (totalUsage, usage) => ({
       inputTokens: totalUsage.inputTokens + usage.inputTokens,
-      cachedInputTokens: totalUsage.cachedInputTokens + usage.cachedInputTokens,
+      cachedInputTokens: sumNullableTokenCounts(
+        totalUsage.cachedInputTokens,
+        usage.cachedInputTokens,
+      ),
       outputTokens: totalUsage.outputTokens + usage.outputTokens,
       reasoningOutputTokens:
         totalUsage.reasoningOutputTokens + usage.reasoningOutputTokens,

@@ -10,7 +10,7 @@ export type AgentRunStatus =
   | 'waiting_for_model'
   | 'running_tool'
   | 'waiting_for_approval'
-  | 'streaming_answer'
+  | 'streaming_assistant'
   | 'succeeded'
   | 'failed'
   | 'cancelled';
@@ -34,7 +34,7 @@ export type AgentEvent =
       stage: AgentModelStage;
     }
   | {
-      type: 'model_delta';
+      type: 'assistant_delta';
       delta: string;
     }
   | {
@@ -129,18 +129,17 @@ export function applyAgentEvent(
       ...state,
       status:
         event.stage === 'answer_generation'
-          ? 'streaming_answer'
+          ? 'streaming_assistant'
           : 'waiting_for_model',
       events: events,
     };
   }
 
-  if (event.type === 'model_delta') {
+  if (event.type === 'assistant_delta') {
     return {
       ...state,
-      status: 'streaming_answer',
+      status: 'streaming_assistant',
       events: events,
-      answer: state.answer + event.delta,
     };
   }
 

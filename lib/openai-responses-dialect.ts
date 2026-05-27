@@ -7,6 +7,7 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseFunctionToolCall,
   ResponseInputItem,
+  ResponseOutputMessage,
   ResponseStreamEvent,
   ResponseUsage,
 } from 'openai/resources/responses/responses';
@@ -36,7 +37,7 @@ function normalizeResponsesUsage(
 
   return {
     inputTokens: usage.input_tokens,
-    cachedInputTokens: usage.input_tokens_details.cached_tokens,
+    cachedInputTokens: usage.input_tokens_details?.cached_tokens ?? null,
     outputTokens: usage.output_tokens,
     reasoningOutputTokens: usage.output_tokens_details.reasoning_tokens,
     totalTokens: usage.total_tokens,
@@ -66,6 +67,16 @@ function messageText(message: Extract<AgentModelMessage, { role: string }>) {
   return message.content;
 }
 
+function messagePhase(
+  message: Exclude<AgentModelMessage, { role: 'tool' }>,
+): 'commentary' | 'final_answer' | null | undefined {
+  if (message.role !== 'assistant') {
+    return undefined;
+  }
+
+  return message.providerPhase;
+}
+
 function appendTextMessage(
   input: ResponseInputItem[],
   message: Exclude<AgentModelMessage, { role: 'tool' }>,
@@ -78,6 +89,7 @@ function appendTextMessage(
     type: 'message',
     role: message.role,
     content: messageText(message),
+    phase: messagePhase(message),
   } satisfies EasyInputMessage);
 }
 
@@ -173,6 +185,18 @@ function toAgentModelResponse(response: Response): AgentModelResponse {
   };
 }
 
+function readResponseOutputMessageText(message: ResponseOutputMessage): string {
+  let text = '';
+
+  for (const content of message.content) {
+    if (content.type === 'output_text') {
+      text += content.text;
+    }
+  }
+
+  return text;
+}
+
 async function* mapResponsesStream(
   stream: AsyncIterable<ResponseStreamEvent>,
   fallbackModel: string,
@@ -185,6 +209,43 @@ async function* mapResponsesStream(
       yield {
         type: 'text_delta',
         delta: event.delta,
+      };
+      continue;
+    }
+
+    if (event.type === 'response.function_call_arguments.delta') {
+      yield {
+        type: 'tool_call_delta',
+        index: event.output_index,
+        itemId: event.item_id,
+        toolCallId: undefined,
+        name: undefined,
+        delta: event.delta,
+      };
+      continue;
+    }
+
+    if (
+      event.type === 'response.output_item.done' &&
+      event.item.type === 'function_call'
+    ) {
+      yield {
+        type: 'tool_call_done',
+        toolCall: toAgentToolCall(event.item),
+      };
+      continue;
+    }
+
+    if (
+      event.type === 'response.output_item.done' &&
+      event.item.type === 'message'
+    ) {
+      yield {
+        type: 'assistant_message_done',
+        message: {
+          text: readResponseOutputMessageText(event.item),
+          providerPhase: event.item.phase ?? null,
+        },
       };
       continue;
     }

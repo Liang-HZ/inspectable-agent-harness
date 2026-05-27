@@ -7,8 +7,8 @@ import {
 
 type AgentStreamCallbacks = {
   onStep: (event: Extract<AgentStreamEvent, { type: 'step' }>) => void;
-  onAnswerDelta: (
-    event: Extract<AgentStreamEvent, { type: 'answerDelta' }>,
+  onAssistantDelta: (
+    event: Extract<AgentStreamEvent, { type: 'assistantDelta' }>,
   ) => void;
   onDone: (event: Extract<AgentStreamEvent, { type: 'done' }>) => void;
   onError: (event: Extract<AgentStreamEvent, { type: 'error' }>) => void;
@@ -73,7 +73,7 @@ function readAgentStreamEvent(data: unknown): AgentStreamEvent | undefined {
   const event = data as AgentStreamEvent;
   if (
     event.type === 'step' ||
-    event.type === 'answerDelta' ||
+    event.type === 'assistantDelta' ||
     event.type === 'done' ||
     event.type === 'error'
   ) {
@@ -92,8 +92,8 @@ function dispatchAgentStreamEvent(
       callbacks.onStep(event);
       return;
 
-    case 'answerDelta':
-      callbacks.onAnswerDelta(event);
+    case 'assistantDelta':
+      callbacks.onAssistantDelta(event);
       return;
 
     case 'done':

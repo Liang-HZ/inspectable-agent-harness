@@ -11,9 +11,9 @@ export function projectAgentEventToStreamEvent(
         step: event.step,
       };
 
-    case 'model_delta':
+    case 'assistant_delta':
       return {
-        type: 'answerDelta',
+        type: 'assistantDelta',
         delta: event.delta,
       };
 
