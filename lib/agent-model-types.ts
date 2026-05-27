@@ -12,8 +12,8 @@ export type AgentModelToolChoice = 'auto' | 'none';
 export type AgentModelToolDefinition = {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
-  strict: boolean;
+  inputSchema: Record<string, unknown>;
+  schemaStrict: boolean;
 };
 
 export type AgentModelToolCall = {

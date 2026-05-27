@@ -326,6 +326,11 @@ AgentModelStreamEvent
 
 Provider dialects translate those into concrete wire formats.
 
+Tool definitions are also provider-neutral. The agent IR uses `inputSchema` and
+`schemaStrict`; OpenAI dialects translate those to their wire-level
+`parameters` and `strict` fields. This keeps future non-OpenAI dialects from
+depending on OpenAI-shaped tool metadata.
+
 Currently implemented dialects:
 
 ```text
@@ -490,6 +495,42 @@ The first cases document the runtime contract:
   then `function_call`, `function_call_output`, and final response
 - text delta without `assistant_message_done`: protocol error
 - tool-call argument delta without `tool_call_committed`: protocol error
+
+## Phase 17: Workspace Read Tools v1
+
+The first real agent tool foundation is read-only workspace exploration rather
+than shell execution. This keeps the learning project close to production agent
+needs while postponing OS process sandboxing and approval complexity.
+
+Registered tools:
+
+```text
+ls      list directory entries
+find    find files by glob-style path pattern
+grep    search file contents with ripgrep
+read    read UTF-8 text files with line pagination
+```
+
+Each tool is marked read-only, non-destructive, closed-world, idempotent, and
+parallel-capable. Paths are resolved under the current workspace root and
+checked with `realpath`, so both lexical escapes such as `../package.json` and
+symlink escapes fail as ordinary tool errors. Those errors become
+`function_call_output` records with `isError: true`, so the model can retry with
+a valid path in the next sampling round.
+
+The tools return bounded structured results rather than unbounded text dumps:
+
+- `read` returns line metadata, content, and a pagination notice such as
+  `Use offset=3 to continue`.
+- `grep` returns structured path/line/match records and a limit notice when
+  matches are truncated.
+- `find` and `ls` return deterministic sorted paths or entries with limit
+  notices.
+
+The tests now cover both direct tool runtime behavior and sampling-loop
+integration. The integration test has the fake model request `read`, verifies
+the real workspace tool runs through the permission/runtime boundary, and
+asserts the ordered `function_call_output` history item.
 
 ## Deferred Work
 

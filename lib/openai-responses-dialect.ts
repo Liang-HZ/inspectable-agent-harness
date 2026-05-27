@@ -58,8 +58,8 @@ function toResponsesTool(tool: AgentModelToolDefinition): FunctionTool {
     type: 'function',
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
-    strict: tool.strict,
+    parameters: tool.inputSchema,
+    strict: tool.schemaStrict,
   };
 }
 

@@ -65,7 +65,7 @@ type SamplingRoundResult = {
 };
 
 const AGENT_SYSTEM_MESSAGE =
-  'You are an inspectable tool-using agent. Decide whether the task needs a local tool. Use the inspect_text tool for text counts, length checks, line counts, or basic text statistics. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
+  'You are an inspectable tool-using agent. Decide whether the task needs a local tool. Use ls/find/grep/read for workspace exploration: find file paths before reading, grep for text or symbols, and read exact files with pagination. Use inspect_text only for direct text counts, length checks, line counts, or basic text statistics. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
 const MAX_AGENT_ROUNDS = 5;
 
 function buildAgentPrompt(input: AgentInput): string {

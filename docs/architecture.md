@@ -47,6 +47,7 @@ flowchart TD
   ModelDialect --> ResponsesDialect[lib/openai-responses-dialect.ts]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
+  AgentTools --> WorkspaceTools[lib/agent-workspace-tools.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   ModelGateway --> OpenAIClient
@@ -90,6 +91,7 @@ lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Local agent tool registry and concrete handlers
+lib/agent-workspace-tools.ts        Read-only workspace file exploration tools
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
 lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
@@ -250,6 +252,24 @@ Messages, or any other provider wire types. This is the same architectural role
 that a database query AST plays before a SQL dialect compiles it to one
 database's SQL.
 
+Tool definitions in this IR use agent-owned field names:
+
+```ts
+type AgentModelToolDefinition = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  schemaStrict: boolean;
+};
+```
+
+`inputSchema` is the JSON Schema object that describes tool arguments.
+`schemaStrict` is the runtime's strict-schema intent. Provider dialects translate
+these fields into provider-specific shapes. OpenAI Chat Completions and OpenAI
+Responses compile them to `parameters` and `strict`; a future Anthropic dialect
+would compile `inputSchema` to Anthropic's `input_schema` and either ignore or
+adapt `schemaStrict`.
+
 `lib/model-provider-dialect.ts` owns the provider dialect contract.
 
 A dialect is responsible for compiling the agent model IR into one wire API and
@@ -402,13 +422,29 @@ This keeps `lib/agent.ts` focused on orchestration instead of tool lifecycle
 details. Later versions can add tool timeouts, retries, interactive approval
 resume, and output validation at this boundary.
 
-`lib/agent-tools.ts` owns the local tool registry and concrete local agent
-tools.
+`lib/agent-tools.ts` owns the local tool registry.
 
 Each tool definition groups the tool name, provider-neutral model tool metadata,
 tool annotations, argument parsing, and the concrete handler. Dialects compile
-the provider-neutral tool metadata into their own wire format. The first
-registered tool is `inspect_text`, which returns basic text statistics.
+the provider-neutral tool metadata into their own wire format. The registry
+currently includes `inspect_text` for direct text statistics plus the read-only
+workspace exploration tools from `lib/agent-workspace-tools.ts`.
+
+`lib/agent-workspace-tools.ts` owns the concrete workspace read tools:
+
+```text
+ls      list workspace directory entries
+find    find files by glob-style path pattern
+grep    search file contents with ripgrep
+read    read UTF-8 text files with line pagination
+```
+
+These tools are read-only, non-destructive, closed-world, idempotent, and marked
+parallel-capable. Each path is resolved against the current workspace root and
+then checked with `realpath`, so `../` paths and symlink escapes fail as ordinary
+tool errors. Large outputs return bounded structured data plus actionable
+notices, such as using a later `offset` for `read` or narrowing a `grep`
+pattern.
 
 `lib/agent-log.ts` owns structured server logs for `/api/agent`.
 
@@ -453,6 +489,7 @@ lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers
 lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
 lib/agent-tools.ts                  Concrete local tool registry and handlers
+lib/agent-workspace-tools.ts        Read-only workspace file exploration tools
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
 lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
@@ -493,6 +530,7 @@ flowchart TD
   SamplingLoop --> ToolScheduler
   ToolScheduler --> ToolRuntime
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
+  AgentTools --> WorkspaceTools[lib/agent-workspace-tools.ts]
   AgentTools --> ResponseItems
   SamplingLoop --> AgentResponse[Final answer plus steps]
 ```
@@ -551,6 +589,22 @@ Ordinary tool errors such as unknown tool names, invalid arguments, or handler
 exceptions become error-shaped `function_call_output` records. That keeps the
 model loop recoverable. Permission pauses and denied policy decisions remain
 fail-closed until approval resume exists.
+
+The first production-shaped tool foundation is read-only workspace exploration,
+not shell execution. The current tool set gives the model enough structure to
+inspect files without a process sandbox:
+
+```text
+read(path, offset?, limit?)
+grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)
+find(pattern, path?, limit?)
+ls(path?, limit?)
+```
+
+This keeps the safety boundary small while still exercising the same
+provider-neutral function-call path that future shell, edit, and MCP tools will
+use. `grep` depends on local `rg` and reports a model-visible tool error if it
+is unavailable.
 
 ## Streaming UI Flow
 
@@ -873,9 +927,9 @@ lib/tools/*.ts                      Larger tool families
 tool name -> annotations -> input schema -> handler -> output schema
 ```
 
-The current registry includes the name, annotations, input parsing, and handler.
-Output schema is the next part to add when the tool boundary needs stricter
-contracts.
+The current registry includes the name, annotations, provider-neutral
+`inputSchema`, runtime input parsing, and handler. Output schema is the next
+part to add when the tool boundary needs stricter contracts.
 
 ## Agent Harness Direction
 

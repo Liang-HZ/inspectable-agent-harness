@@ -2,6 +2,7 @@ import * as z from 'zod';
 
 import type { AgentModelToolDefinition } from './agent-model-types';
 import type { AgentToolAnnotations } from './agent-permissions';
+import { workspaceReadToolDefinitions } from './agent-workspace-tools';
 
 const INSPECT_TEXT_TOOL_NAME = 'inspect_text';
 
@@ -57,7 +58,7 @@ const inspectTextToolDefinition = {
     name: INSPECT_TEXT_TOOL_NAME,
     description:
       'Inspect plain text and return character, line, and word counts. Use this when the user asks about length, counts, or basic text statistics.',
-    parameters: {
+    inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
@@ -68,7 +69,7 @@ const inspectTextToolDefinition = {
       },
       required: ['text'],
     },
-    strict: true,
+    schemaStrict: true,
   },
   execute: (argumentsJson: string): AgentToolResult => {
     const input = parseInspectTextInput(argumentsJson);
@@ -82,6 +83,7 @@ const inspectTextToolDefinition = {
 
 export const agentToolDefinitions: AgentToolDefinition[] = [
   inspectTextToolDefinition,
+  ...workspaceReadToolDefinitions,
 ];
 
 export const agentToolRegistry = new Map<string, AgentToolDefinition>(

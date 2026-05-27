@@ -222,6 +222,67 @@ test('records working message, function call, tool output, and final response', 
   });
 });
 
+test('records workspace read tool output through the sampling loop', async () => {
+  const output = await runLoopWithFakeGateway([
+    [
+      { type: 'text_delta', delta: 'Reading the file.' },
+      {
+        type: 'assistant_message_done',
+        message: { text: 'Reading the file.', providerPhase: null },
+      },
+      {
+        type: 'tool_call_delta',
+        index: 0,
+        itemId: 'item-1',
+        toolCallId: undefined,
+        name: undefined,
+        delta: JSON.stringify({
+          path: 'tests/fixtures/workspace-tools/src/example.ts',
+          limit: 20,
+        }),
+      },
+      {
+        type: 'tool_call_committed',
+        toolCall: {
+          id: 'call-read-1',
+          name: 'read',
+          argumentsJson: JSON.stringify({
+            path: 'tests/fixtures/workspace-tools/src/example.ts',
+            limit: 20,
+          }),
+        },
+      },
+      { type: 'completed', model: 'fake-model', usage: usage },
+    ],
+    [
+      { type: 'text_delta', delta: 'The file exports meaningfulFunction.' },
+      {
+        type: 'assistant_message_done',
+        message: {
+          text: 'The file exports meaningfulFunction.',
+          providerPhase: null,
+        },
+      },
+      { type: 'completed', model: 'fake-model', usage: usage },
+    ],
+  ]);
+
+  assert.equal(output.result.answer, 'The file exports meaningfulFunction.');
+  assert.equal(output.result.usedTool, true);
+
+  const toolOutput = output.history.find(
+    (item) => item.type === 'function_call_output' && item.toolName === 'read',
+  );
+
+  assert.notEqual(toolOutput, undefined);
+  assert.equal(toolOutput?.type, 'function_call_output');
+  assert.equal(toolOutput?.isError, false);
+
+  const result = toolOutput.output as Record<string, unknown>;
+  assert.equal(result.path, 'tests/fixtures/workspace-tools/src/example.ts');
+  assert.match(String(result.content), /meaningfulFunction/);
+});
+
 test('rejects streamed text without an assistant message commit', async () => {
   await assert.rejects(
     () =>
