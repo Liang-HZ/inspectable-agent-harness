@@ -283,7 +283,7 @@ async function* mapChatCompletionStream(
     if (choice?.finish_reason === 'tool_calls' && !emittedToolCalls) {
       for (const toolCall of completedToolCalls()) {
         yield {
-          type: 'tool_call_done',
+          type: 'tool_call_committed',
           toolCall: toolCall,
         };
       }
@@ -302,7 +302,7 @@ async function* mapChatCompletionStream(
   if (toolCallParts.size > 0 && !emittedToolCalls) {
     for (const toolCall of completedToolCalls()) {
       yield {
-        type: 'tool_call_done',
+        type: 'tool_call_committed',
         toolCall: toolCall,
       };
     }

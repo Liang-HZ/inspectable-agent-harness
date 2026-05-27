@@ -275,7 +275,7 @@ async function runSamplingRound(
         assistantMessages.push(event.message);
         break;
 
-      case 'tool_call_done':
+      case 'tool_call_committed':
         toolCalls.push(event.toolCall);
         break;
 
@@ -307,7 +307,7 @@ async function runSamplingRound(
   };
 }
 
-async function runSamplingLoop(
+export async function runSamplingLoop(
   modelGateway: AgentModelGateway,
   input: AgentInput,
   context: AgentRunContext,

@@ -274,12 +274,12 @@ type AgentModelStreamEvent =
       name: string | undefined;
       delta: string;
     }
-  | { type: 'tool_call_done'; toolCall: AgentModelToolCall }
+  | { type: 'tool_call_committed'; toolCall: AgentModelToolCall }
   | { type: 'completed'; model: string; usage: AgentModelUsageSnapshot };
 ```
 
 `text_delta` is provisional display text. `assistant_message_done` is the commit
-point for one assistant message. `tool_call_done` is the only signal that makes
+point for one assistant message. `tool_call_committed` is the only signal that makes
 the agent continue to tools. Provider metadata such as OpenAI Responses
 `phase: "commentary" | "final_answer"` is preserved on committed assistant
 messages when present, but the core loop does not use it as the stop condition.
@@ -600,7 +600,7 @@ sequenceDiagram
         UI->>UI: dispatch(agentAssistantDeltaReceived)
       else assistant_message_done
         Agent->>Agent: commit assistant message for this round
-      else tool_call_done
+      else tool_call_committed
         Agent->>Agent: collect tool call for this round
       else completed
         Agent->>Agent: record model and usage for this round

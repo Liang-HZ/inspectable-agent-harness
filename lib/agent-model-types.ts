@@ -75,7 +75,7 @@ export type AgentModelStreamEvent =
       delta: string;
     }
   | {
-      type: 'tool_call_done';
+      type: 'tool_call_committed';
       toolCall: AgentModelToolCall;
     }
   | {

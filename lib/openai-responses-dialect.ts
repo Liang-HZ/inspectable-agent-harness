@@ -230,7 +230,7 @@ async function* mapResponsesStream(
       event.item.type === 'function_call'
     ) {
       yield {
-        type: 'tool_call_done',
+        type: 'tool_call_committed',
         toolCall: toAgentToolCall(event.item),
       };
       continue;

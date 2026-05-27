@@ -408,7 +408,7 @@ The runtime spine now uses streaming model sampling for every round:
 ```text
 initialize provider-neutral history
 stream model with history and tools
-collect text_delta / assistant_message_done / tool_call_delta / tool_call_done / completed
+collect text_delta / assistant_message_done / tool_call_delta / tool_call_committed / completed
 if tool calls exist:
   record function_call items
   execute one batch of tools
@@ -427,7 +427,7 @@ The provider-neutral stream event now includes tool-call events:
 type AgentModelStreamEvent =
   | { type: 'text_delta'; delta: string }
   | { type: 'tool_call_delta'; ... }
-  | { type: 'tool_call_done'; toolCall: AgentModelToolCall }
+  | { type: 'tool_call_committed'; toolCall: AgentModelToolCall }
   | { type: 'completed'; model: string; usage: AgentModelUsageSnapshot };
 ```
 
@@ -444,7 +444,7 @@ together:
 ```text
 text_delta                 provisional assistant text for live display
 assistant_message_done     commit point for one complete assistant message
-round decision             continue only if this round has tool_call_done events
+round decision             continue only if this round has tool_call_committed events
 ```
 
 Provider dialects own the conversion from native stream events to this contract:
@@ -453,19 +453,19 @@ Provider dialects own the conversion from native stream events to this contract:
 OpenAI Chat Completions:
   delta.content -> text_delta
   stream completion -> assistant_message_done
-  delta.tool_calls + finish_reason/tool-call tail -> tool_call_done
+  delta.tool_calls + finish_reason/tool-call tail -> tool_call_committed
 
 OpenAI Responses:
   response.output_text.delta -> text_delta
   response.output_item.done(message) -> assistant_message_done
-  response.output_item.done(function_call) -> tool_call_done
+  response.output_item.done(function_call) -> tool_call_committed
 ```
 
 The agent loop waits until a sampling round has completed before deciding what
 the committed assistant message means:
 
 ```text
-if tool_call_done events exist:
+if tool_call_committed events exist:
   committed assistant messages are working messages
   execute tools and continue
 else:
@@ -475,6 +475,21 @@ else:
 OpenAI Responses `phase` is preserved as provider metadata when present, but it
 does not drive the loop. The loop stop condition remains provider-neutral:
 whether the completed round requested tools.
+
+## Phase 16: Deterministic Sampling Loop Tests
+
+The sampling loop gained model-free tests with a fake `AgentModelGateway`.
+Instead of calling a real provider, tests feed deterministic
+`AgentModelStreamEvent` sequences into `runSamplingLoop` and assert the resulting
+history shape.
+
+The first cases document the runtime contract:
+
+- no tool call: committed assistant message becomes `runtimeRole: "final_response"`
+- tool call: committed assistant message becomes `runtimeRole: "working_message"`,
+  then `function_call`, `function_call_output`, and final response
+- text delta without `assistant_message_done`: protocol error
+- tool-call argument delta without `tool_call_committed`: protocol error
 
 ## Deferred Work
 
