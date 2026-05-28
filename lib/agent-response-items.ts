@@ -28,7 +28,7 @@ export type AgentResponseItem =
       type: 'function_call_output';
       callId: string;
       toolName: string;
-      output: unknown;
+      output: string;
       isError: boolean;
     };
 
@@ -66,14 +66,7 @@ function toModelMessage(
 function serializeFunctionCallOutput(
   item: Extract<AgentResponseItem, { type: 'function_call_output' }>,
 ): string {
-  if (item.isError) {
-    return JSON.stringify({
-      ok: false,
-      error: item.output,
-    });
-  }
-
-  return JSON.stringify(item.output);
+  return item.output;
 }
 
 export function responseItemsToModelMessages(

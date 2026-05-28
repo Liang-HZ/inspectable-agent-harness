@@ -205,12 +205,8 @@ test('records working message, function call, tool output, and final response', 
     type: 'function_call_output',
     callId: 'call-1',
     toolName: 'inspect_text',
-    output: {
-      characterCount: 11,
-      lineCount: 1,
-      wordCount: 2,
-      preview: 'hello world',
-    },
+    output:
+      'Character count: 11\nLine count: 1\nWord count: 2\nPreview: hello world',
     isError: false,
   });
   assert.deepEqual(responseItems[3], {
@@ -278,9 +274,50 @@ test('records workspace read tool output through the sampling loop', async () =>
   assert.equal(toolOutput?.type, 'function_call_output');
   assert.equal(toolOutput?.isError, false);
 
-  const result = toolOutput.output as Record<string, unknown>;
-  assert.equal(result.path, 'tests/fixtures/workspace-tools/src/example.ts');
-  assert.match(String(result.content), /meaningfulFunction/);
+  assert.equal(typeof toolOutput.output, 'string');
+  assert.match(
+    toolOutput.output,
+    /File: tests\/fixtures\/workspace-tools\/src\/example\.ts/,
+  );
+  assert.match(toolOutput.output, /meaningfulFunction/);
+});
+
+test('serializes recoverable tool errors as plain model-visible text', async () => {
+  const output = await runLoopWithFakeGateway([
+    [
+      {
+        type: 'tool_call_committed',
+        toolCall: {
+          id: 'call-read-error',
+          name: 'read',
+          argumentsJson: JSON.stringify({ path: '../package.json' }),
+        },
+      },
+      { type: 'completed', model: 'fake-model', usage: usage },
+    ],
+    [
+      { type: 'text_delta', delta: 'The path is outside the workspace.' },
+      {
+        type: 'assistant_message_done',
+        message: {
+          text: 'The path is outside the workspace.',
+          providerPhase: null,
+        },
+      },
+      { type: 'completed', model: 'fake-model', usage: usage },
+    ],
+  ]);
+
+  const toolOutput = output.history.find(
+    (item) =>
+      item.type === 'function_call_output' && item.callId === 'call-read-error',
+  );
+
+  assert.notEqual(toolOutput, undefined);
+  assert.equal(toolOutput?.type, 'function_call_output');
+  assert.equal(toolOutput?.isError, true);
+  assert.equal(typeof toolOutput.output, 'string');
+  assert.match(toolOutput.output, /^Error \[PATH_OUTSIDE_WORKSPACE\]:/);
 });
 
 test('rejects streamed text without an assistant message commit', async () => {

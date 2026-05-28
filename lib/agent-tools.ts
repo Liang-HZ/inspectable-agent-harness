@@ -2,6 +2,11 @@ import * as z from 'zod';
 
 import type { AgentModelToolDefinition } from './agent-model-types';
 import type { AgentToolAnnotations } from './agent-permissions';
+import {
+  AgentToolRespondToModelError,
+  createSuccessToolOutput,
+  type AgentToolOutput,
+} from './agent-tool-output';
 import { workspaceReadToolDefinitions } from './agent-workspace-tools';
 
 const INSPECT_TEXT_TOOL_NAME = 'inspect_text';
@@ -23,7 +28,7 @@ type InspectTextResult = {
 
 export type AgentToolResult = {
   input: unknown;
-  result: unknown;
+  output: AgentToolOutput;
 };
 
 export type AgentToolDefinition = {
@@ -35,14 +40,17 @@ export type AgentToolDefinition = {
     argumentsJson: string,
     signal: AbortSignal | undefined,
   ) => AgentToolResult | Promise<AgentToolResult>;
+  timeoutMs?: number;
 };
 
 export type AgentToolExecution = {
   toolCallId: string;
   toolName: string;
   input: unknown;
-  result: unknown;
+  output: AgentToolOutput;
+  modelOutput: string;
   isError: boolean;
+  durationMs: number;
 };
 
 const inspectTextToolDefinition = {
@@ -73,10 +81,14 @@ const inspectTextToolDefinition = {
   },
   execute: (argumentsJson: string): AgentToolResult => {
     const input = parseInspectTextInput(argumentsJson);
+    const result = inspectText(input);
 
     return {
       input: input,
-      result: inspectText(input),
+      output: createSuccessToolOutput({
+        contentText: formatInspectTextResult(result),
+        details: result,
+      }),
     };
   },
 } satisfies AgentToolDefinition;
@@ -111,12 +123,33 @@ function inspectText(input: InspectTextInput) {
   } satisfies InspectTextResult;
 }
 
+function formatInspectTextResult(result: InspectTextResult): string {
+  return [
+    `Character count: ${result.characterCount}`,
+    `Line count: ${result.lineCount}`,
+    `Word count: ${result.wordCount}`,
+    `Preview: ${result.preview}`,
+  ].join('\n');
+}
+
 function parseInspectTextInput(argumentsJson: string): InspectTextInput {
-  const parsedJson = JSON.parse(argumentsJson);
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(argumentsJson);
+  } catch {
+    throw new AgentToolRespondToModelError(
+      'VALIDATION_ERROR',
+      'Tool `inspect_text` received invalid JSON arguments.',
+    );
+  }
+
   const parsedInput = inspectTextInputSchema.safeParse(parsedJson);
 
   if (!parsedInput.success) {
-    throw new Error('Tool `inspect_text` received invalid arguments.');
+    throw new AgentToolRespondToModelError(
+      'VALIDATION_ERROR',
+      'Tool `inspect_text` received invalid arguments.',
+    );
   }
 
   return parsedInput.data;

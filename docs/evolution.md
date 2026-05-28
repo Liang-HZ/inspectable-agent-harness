@@ -370,7 +370,7 @@ type AgentResponseItem =
       type: 'function_call_output';
       callId: string;
       toolName: string;
-      output: unknown;
+      output: string;
       isError: boolean;
     };
 ```
@@ -518,19 +518,87 @@ symlink escapes fail as ordinary tool errors. Those errors become
 `function_call_output` records with `isError: true`, so the model can retry with
 a valid path in the next sampling round.
 
-The tools return bounded structured results rather than unbounded text dumps:
+The tools return bounded model-facing text plus internal structured details
+rather than unbounded raw dumps:
 
-- `read` returns line metadata, content, and a pagination notice such as
-  `Use offset=3 to continue`.
-- `grep` returns structured path/line/match records and a limit notice when
-  matches are truncated.
-- `find` and `ls` return deterministic sorted paths or entries with limit
-  notices.
+- `read` sends file path, line range, and content to the model; details preserve
+  line metadata and truncation state.
+- `grep` sends path/line/match text to the model; details preserve structured
+  match records and limit state.
+- `find` and `ls` send deterministic sorted paths or entries to the model;
+  details preserve the structured arrays.
 
 The tests now cover both direct tool runtime behavior and sampling-loop
 integration. The integration test has the fake model request `read`, verifies
 the real workspace tool runs through the permission/runtime boundary, and
 asserts the ordered `function_call_output` history item.
+
+## Phase 18: Tool Result Contract v1
+
+Tool results now have an explicit split between internal runtime structure and
+model-visible history. Tools return `AgentToolOutput`; the runtime serializes it
+before appending `function_call_output`.
+
+```ts
+type AgentToolOutput =
+  | { type: 'success'; contentText: string; details?: unknown; notice?: string }
+  | {
+      type: 'respond_to_model';
+      error: { code: AgentToolErrorCode; message: string };
+    }
+  | { type: 'fatal'; error: { code: AgentToolErrorCode; message: string } };
+```
+
+The model never receives an `{ ok, error, details }` JSON envelope. It sees only
+plain text:
+
+```text
+success            -> contentText plus optional [notice]
+respond_to_model   -> Error [CODE]: message
+fatal              -> no function_call_output; terminate the run
+```
+
+Runtime events and logs still keep the structured output, including details,
+error codes, duration, and whether the output was an error. This mirrors the
+useful part of Codex and pi-mono: model-facing output stays easy for the model
+to read, while the runtime keeps typed metadata for UI, debugging, and future
+evaluation.
+
+The runtime also owns two lifecycle errors:
+
+- timeout becomes `Error [TIMEOUT]: ...` in history, so the model can recover.
+- in-flight abort becomes `Error [ABORTED]: ...` in history, so the model sees
+  that the tool did not complete.
+
+Permission pauses remain fail-closed for now because approval resume is not
+implemented yet.
+
+## Phase 19: OpenAI Strict Tool Schema Adapter
+
+The first browser run with workspace tools exposed an OpenAI strict-schema
+constraint: with `strict: true`, OpenAI requires every property in a tool schema
+to be listed in `required`, and optional fields must be represented by allowing
+`null`.
+
+The fix belongs in the provider dialect layer, not in the agent tool contract.
+`lib/openai-tool-schema.ts` now compiles provider-neutral `inputSchema` into an
+OpenAI-compatible strict schema before the Chat Completions and Responses
+dialects send tools upstream.
+
+```text
+agent inputSchema:
+  required: ['path']
+  properties: path, offset?, limit?
+
+OpenAI strict parameters:
+  required: ['path', 'offset', 'limit']
+  offset.type = ['number', 'null']
+  limit.type = ['number', 'null']
+```
+
+The workspace tool Zod parsers also accept strict-mode `null` for optional
+arguments and normalize it to `undefined`, so model calls that follow the
+OpenAI schema do not fail at the runtime validation boundary.
 
 ## Deferred Work
 

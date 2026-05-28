@@ -4,6 +4,10 @@ import path from 'node:path';
 
 import * as z from 'zod';
 
+import {
+  AgentToolRespondToModelError,
+  createSuccessToolOutput,
+} from './agent-tool-output';
 import type { AgentToolDefinition, AgentToolResult } from './agent-tools';
 
 const WORKSPACE_ROOT = path.join(
@@ -92,30 +96,42 @@ const optionalGlobSchema = z.preprocess(
   z.string().trim().min(1).optional(),
 );
 
+function optionalIntegerSchema(max: number) {
+  return z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.number().int().min(1).max(max).optional(),
+  );
+}
+
+const optionalBooleanSchema = z.preprocess(
+  (value) => (value === null ? undefined : value),
+  z.boolean().optional(),
+);
+
 const readInputSchema = z.strictObject({
   path: pathSchema,
-  offset: z.number().int().min(1).optional(),
-  limit: z.number().int().min(1).max(MAX_READ_LINE_LIMIT).optional(),
+  offset: optionalIntegerSchema(Number.MAX_SAFE_INTEGER),
+  limit: optionalIntegerSchema(MAX_READ_LINE_LIMIT),
 });
 
 const listInputSchema = z.strictObject({
   path: optionalPathSchema,
-  limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional(),
+  limit: optionalIntegerSchema(MAX_LIST_LIMIT),
 });
 
 const findInputSchema = z.strictObject({
   pattern: z.string().trim().min(1),
   path: optionalPathSchema,
-  limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional(),
+  limit: optionalIntegerSchema(MAX_LIST_LIMIT),
 });
 
 const grepInputSchema = z.strictObject({
   pattern: z.string().trim().min(1),
   path: optionalPathSchema,
   glob: optionalGlobSchema,
-  ignoreCase: z.boolean().optional(),
-  literal: z.boolean().optional(),
-  limit: z.number().int().min(1).max(MAX_GREP_LIMIT).optional(),
+  ignoreCase: optionalBooleanSchema,
+  literal: optionalBooleanSchema,
+  limit: optionalIntegerSchema(MAX_GREP_LIMIT),
 });
 
 type ReadInput = z.infer<typeof readInputSchema>;
@@ -164,7 +180,12 @@ const readToolDefinition = {
 
     return {
       input: input,
-      result: result,
+      output: createSuccessToolOutput({
+        contentText: formatReadFileResult(result),
+        details: result,
+        notice: result.notice,
+        truncated: result.truncated,
+      }),
     };
   },
 } satisfies AgentToolDefinition;
@@ -206,7 +227,12 @@ const listToolDefinition = {
 
     return {
       input: input,
-      result: result,
+      output: createSuccessToolOutput({
+        contentText: formatListFilesResult(result),
+        details: result,
+        notice: result.notice,
+        truncated: result.truncated,
+      }),
     };
   },
 } satisfies AgentToolDefinition;
@@ -253,7 +279,12 @@ const findToolDefinition = {
 
     return {
       input: input,
-      result: result,
+      output: createSuccessToolOutput({
+        contentText: formatFindFilesResult(result),
+        details: result,
+        notice: result.notice,
+        truncated: result.truncated,
+      }),
     };
   },
 } satisfies AgentToolDefinition;
@@ -311,7 +342,12 @@ const grepToolDefinition = {
 
     return {
       input: input,
-      result: result,
+      output: createSuccessToolOutput({
+        contentText: formatGrepResult(result),
+        details: result,
+        notice: result.notice,
+        truncated: result.truncated,
+      }),
     };
   },
 } satisfies AgentToolDefinition;
@@ -328,11 +364,23 @@ function parseToolInput<T>(
   argumentsJson: string,
   schema: z.ZodType<T>,
 ): T {
-  const parsedJson = JSON.parse(argumentsJson);
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(argumentsJson);
+  } catch {
+    throw new AgentToolRespondToModelError(
+      'VALIDATION_ERROR',
+      `Tool \`${toolName}\` received invalid JSON arguments.`,
+    );
+  }
+
   const parsedInput = schema.safeParse(parsedJson);
 
   if (!parsedInput.success) {
-    throw new Error(`Tool \`${toolName}\` received invalid arguments.`);
+    throw new AgentToolRespondToModelError(
+      'VALIDATION_ERROR',
+      `Tool \`${toolName}\` received invalid arguments.`,
+    );
   }
 
   return parsedInput.data;
@@ -350,7 +398,10 @@ async function resolveWorkspacePath(inputPath: string | undefined) {
   try {
     realAbsolutePath = await realpath(/* turbopackIgnore: true */ absolutePath);
   } catch {
-    throw new Error(`Path not found: ${displayWorkspacePath(absolutePath)}`);
+    throw new AgentToolRespondToModelError(
+      'PATH_NOT_FOUND',
+      `Path not found: ${displayWorkspacePath(absolutePath)}`,
+    );
   }
 
   assertInsideWorkspace(realAbsolutePath);
@@ -369,7 +420,8 @@ function assertInsideWorkspace(absolutePath: string): void {
   }
 
   if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    throw new Error(
+    throw new AgentToolRespondToModelError(
+      'PATH_OUTSIDE_WORKSPACE',
       `Path is outside the workspace root: ${path.normalize(absolutePath)}`,
     );
   }
@@ -391,7 +443,10 @@ async function assertFile(pathInfo: WorkspacePath): Promise<void> {
   );
 
   if (!pathStat.isFile()) {
-    throw new Error(`Path is not a file: ${pathInfo.relativePath}`);
+    throw new AgentToolRespondToModelError(
+      'NOT_A_FILE',
+      `Path is not a file: ${pathInfo.relativePath}`,
+    );
   }
 }
 
@@ -401,7 +456,10 @@ async function assertDirectory(pathInfo: WorkspacePath): Promise<void> {
   );
 
   if (!pathStat.isDirectory()) {
-    throw new Error(`Path is not a directory: ${pathInfo.relativePath}`);
+    throw new AgentToolRespondToModelError(
+      'NOT_A_DIRECTORY',
+      `Path is not a directory: ${pathInfo.relativePath}`,
+    );
   }
 }
 
@@ -840,4 +898,55 @@ function formatBytes(bytes: number): string {
   }
 
   return `${bytes} bytes`;
+}
+
+function formatReadFileResult(result: ReadFileResult): string {
+  return [
+    `File: ${result.path}`,
+    `Lines: ${result.startLine}-${result.endLine} of ${result.totalLines}`,
+    '',
+    result.content,
+  ].join('\n');
+}
+
+function formatListFilesResult(result: ListFilesResult): string {
+  if (result.entries.length === 0) {
+    return `Directory: ${result.path}\n\nNo entries.`;
+  }
+
+  return [
+    `Directory: ${result.path}`,
+    '',
+    ...result.entries.map(
+      (entry) => `${entry.type.padEnd(9, ' ')} ${entry.path}`,
+    ),
+  ].join('\n');
+}
+
+function formatFindFilesResult(result: FindFilesResult): string {
+  if (result.paths.length === 0) {
+    return `Find: ${result.pattern}\nPath: ${result.path}\n\nNo matching files.`;
+  }
+
+  return [
+    `Find: ${result.pattern}`,
+    `Path: ${result.path}`,
+    '',
+    ...result.paths,
+  ].join('\n');
+}
+
+function formatGrepResult(result: GrepResult): string {
+  if (result.matches.length === 0) {
+    return `Grep: ${result.pattern}\nPath: ${result.path}\n\nNo matches.`;
+  }
+
+  return [
+    `Grep: ${result.pattern}`,
+    `Path: ${result.path}`,
+    '',
+    ...result.matches.map(
+      (match) => `${match.path}:${match.lineNumber}: ${match.line}`,
+    ),
+  ].join('\n');
 }

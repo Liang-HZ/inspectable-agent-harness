@@ -1,0 +1,1661 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Runtime Map</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17202a;
+        --muted: #5d6775;
+        --line: #d7dde5;
+        --soft-line: #e8edf3;
+        --paper: #fbfcfe;
+        --surface: #ffffff;
+        --surface-2: #f3f6fa;
+        --blue: #1f66d1;
+        --teal: #0f766e;
+        --red: #a43a35;
+        --green: #28713b;
+        --yellow: #8a5b00;
+        --code: #101828;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        line-height: 1.6;
+      }
+
+      a {
+        color: var(--blue);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      code,
+      pre {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          'Liberation Mono', monospace;
+      }
+
+      code {
+        color: var(--code);
+        background: #eef3f9;
+        border: 1px solid #dde6f2;
+        border-radius: 4px;
+        padding: 0.1rem 0.3rem;
+        font-size: 0.92em;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 1rem 0 0;
+        padding: 1rem;
+        background: #111827;
+        color: #eef2ff;
+        border-radius: 8px;
+        font-size: 0.88rem;
+        line-height: 1.55;
+      }
+
+      pre code {
+        color: inherit;
+        background: transparent;
+        border: 0;
+        padding: 0;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 1.25rem;
+        overflow: auto;
+        border-right: 1px solid var(--line);
+        background: var(--surface);
+      }
+
+      .brand {
+        margin-bottom: 1.25rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--soft-line);
+      }
+
+      .brand h1 {
+        margin: 0 0 0.35rem;
+        font-size: 1.1rem;
+        line-height: 1.25;
+      }
+
+      .brand p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .nav-group {
+        margin: 1rem 0;
+      }
+
+      .nav-group h2 {
+        margin: 0 0 0.45rem;
+        color: var(--muted);
+        font-size: 0.72rem;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .nav-group a {
+        display: block;
+        padding: 0.28rem 0;
+        color: var(--ink);
+        font-size: 0.92rem;
+      }
+
+      main {
+        min-width: 0;
+        padding: 2rem clamp(1.25rem, 4vw, 4rem) 4rem;
+      }
+
+      .hero {
+        max-width: 1100px;
+        padding: 0 0 1.5rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .eyebrow {
+        margin: 0 0 0.5rem;
+        color: var(--teal);
+        font-weight: 700;
+        font-size: 0.82rem;
+      }
+
+      .hero h1 {
+        max-width: 900px;
+        margin: 0;
+        font-size: clamp(2rem, 5vw, 4.25rem);
+        line-height: 1.05;
+        letter-spacing: 0;
+      }
+
+      .hero p {
+        max-width: 880px;
+        margin: 1rem 0 0;
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+
+      section {
+        max-width: 1120px;
+        padding: 2rem 0;
+        border-bottom: 1px solid var(--soft-line);
+      }
+
+      section h2 {
+        margin: 0 0 0.75rem;
+        font-size: 1.7rem;
+        line-height: 1.25;
+      }
+
+      section h3 {
+        margin: 1.5rem 0 0.45rem;
+        font-size: 1.14rem;
+      }
+
+      section p {
+        max-width: 900px;
+        margin: 0.5rem 0;
+      }
+
+      .lead {
+        color: var(--muted);
+        font-size: 1rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .grid.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 1rem;
+      }
+
+      .panel h3 {
+        margin-top: 0;
+      }
+
+      .panel p:last-child,
+      .panel ul:last-child {
+        margin-bottom: 0;
+      }
+
+      .tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.85rem;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .status-ok {
+        color: var(--green);
+        font-weight: 700;
+      }
+
+      .status-warn {
+        color: var(--yellow);
+        font-weight: 700;
+      }
+
+      .status-gap {
+        color: var(--red);
+        font-weight: 700;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 760px;
+      }
+
+      th,
+      td {
+        padding: 0.7rem 0.85rem;
+        border-bottom: 1px solid var(--soft-line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .flow {
+        display: grid;
+        gap: 0.65rem;
+        margin-top: 1rem;
+      }
+
+      .flow-step {
+        display: grid;
+        grid-template-columns: 3.4rem minmax(0, 1fr);
+        gap: 0.8rem;
+        align-items: start;
+      }
+
+      .num {
+        width: 2.4rem;
+        height: 2.4rem;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #e8f2ff;
+        color: var(--blue);
+        font-weight: 800;
+      }
+
+      .flow-body {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 0.85rem 1rem;
+      }
+
+      .flow-body h3 {
+        margin: 0 0 0.25rem;
+      }
+
+      .flow-body p {
+        margin: 0.25rem 0;
+      }
+
+      .lane {
+        margin-top: 1rem;
+        border-left: 4px solid var(--blue);
+        padding: 0.25rem 0 0.25rem 1rem;
+      }
+
+      .lane h3 {
+        margin-top: 0;
+      }
+
+      .timeline {
+        margin-top: 1rem;
+        border-left: 2px solid var(--line);
+        padding-left: 1rem;
+      }
+
+      .time-item {
+        position: relative;
+        margin: 0 0 1rem;
+        padding: 0.9rem 1rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .time-item::before {
+        content: '';
+        position: absolute;
+        left: -1.45rem;
+        top: 1rem;
+        width: 0.75rem;
+        height: 0.75rem;
+        border-radius: 50%;
+        background: var(--blue);
+        border: 2px solid var(--paper);
+      }
+
+      .time-item h3 {
+        margin: 0 0 0.35rem;
+      }
+
+      .file-list {
+        columns: 2;
+        column-gap: 2rem;
+        margin: 0.75rem 0 0;
+      }
+
+      .file-list li {
+        break-inside: avoid;
+        margin: 0 0 0.35rem;
+      }
+
+      .note {
+        margin-top: 1rem;
+        padding: 1rem;
+        border-left: 4px solid var(--teal);
+        background: #edf8f6;
+        border-radius: 0 8px 8px 0;
+      }
+
+      .warning {
+        border-left-color: var(--yellow);
+        background: #fff8e6;
+      }
+
+      @media (max-width: 900px) {
+        .layout {
+          display: block;
+        }
+
+        .sidebar {
+          position: static;
+          height: auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        main {
+          padding: 1.25rem 1rem 3rem;
+        }
+
+        .grid,
+        .grid.three {
+          grid-template-columns: 1fr;
+        }
+
+        .file-list {
+          columns: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1>Agent Runtime Map</h1>
+          <p>当前能力、分层、数据流和演化过程。</p>
+        </div>
+        <nav>
+          <div class="nav-group">
+            <h2>总览</h2>
+            <a href="#what">我们现在做到了什么</a>
+            <a href="#layers">当前分层</a>
+            <a href="#files">代码地图</a>
+          </div>
+          <div class="nav-group">
+            <h2>链路</h2>
+            <a href="#stream-flow">流式 Agent 数据链路</a>
+            <a href="#sampling">Sampling Loop</a>
+            <a href="#history">模型可见历史</a>
+            <a href="#events">事件和前端投影</a>
+          </div>
+          <div class="nav-group">
+            <h2>核心部件</h2>
+            <a href="#provider">Provider Dialect</a>
+            <a href="#tools">工具系统</a>
+            <a href="#permissions">权限骨架</a>
+            <a href="#sessions">JSONL Session</a>
+            <a href="#usage">Token Usage</a>
+          </div>
+          <div class="nav-group">
+            <h2>复盘</h2>
+            <a href="#evolution">演化时间线</a>
+            <a href="#decisions">关键决策</a>
+            <a href="#gaps">还没做什么</a>
+          </div>
+        </nav>
+      </aside>
+
+      <main>
+        <header class="hero">
+          <p class="eyebrow">/Users/simplelife/WebstormProjects/myJsTest</p>
+          <h1>一个正在长成生产级 Agent 的学习项目</h1>
+          <p>
+            这份 HTML 用数据流转链路解释现阶段的能力：用户输入如何进入 Next.js
+            API，如何变成 provider-neutral history，如何经 dialect
+            发给模型，如何接收流式事件，如何执行工具，如何继续
+            loop，最后如何把结果、事件、usage 和 session 持久化串起来。
+          </p>
+          <div class="tag-row">
+            <span class="tag">Next.js App Router</span>
+            <span class="tag">TypeScript</span>
+            <span class="tag">OpenAI Chat + Responses</span>
+            <span class="tag">Streaming Sampling Loop</span>
+            <span class="tag">Workspace Read Tools</span>
+            <span class="tag">JSONL Sessions</span>
+          </div>
+        </header>
+
+        <section id="what">
+          <h2>我们现在做到了什么</h2>
+          <p class="lead">
+            这个项目已经不只是一个“调用模型的接口”。它现在有了一个小而完整的
+            Agent runtime
+            spine：能接请求、流式调用模型、接受工具调用、执行工具、写回工具结果、继续模型轮次、产出最终答案，并把过程记录下来。
+          </p>
+
+          <div class="grid three">
+            <div class="panel">
+              <h3>模型调用</h3>
+              <p>
+                支持 OpenAI-compatible 的 <code>chat.completions</code> 和
+                <code>responses</code> 两种 wire API。runtime 不直接看 provider
+                原始字段，而是通过 dialect 消化成统一事件。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>Agent Loop</h3>
+              <p>
+                每一轮都是一次 streaming sampling round。没有 tool call
+                的那轮就是最终答案，不再额外调用一次模型生成总结。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>工具系统</h3>
+              <p>
+                现在有 <code>inspect_text</code>，以及真正用于 workspace 探查的
+                <code>ls</code
+                >、<code>find</code>、<code>grep</code>、<code>read</code>。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>流式输出</h3>
+              <p>
+                后端发出 <code>assistant_delta</code>，路由投影成前端 SSE 的
+                <code>assistantDelta</code>。UI
+                是观察者，不执行工具，也不调用模型。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>历史和回放基础</h3>
+              <p>
+                streaming run 会写 JSONL
+                session：<code>session_meta</code>、<code>turn_context</code>、<code>agent_event</code>、<code>response_item</code>。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>测试基础</h3>
+              <p>
+                有 fake <code>AgentModelGateway</code> 的 deterministic
+                sampling-loop 测试，也有真实 workspace tool runtime
+                测试，覆盖成功、错误、截断和集成链路。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="layers">
+          <h2>当前分层</h2>
+          <p class="lead">
+            现在最重要的是看清每层的职责边界。Agent
+            不是一个文件，也不是模型本身，而是一组围绕模型的 runtime 边界。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>层</th>
+                  <th>核心文件</th>
+                  <th>职责</th>
+                  <th>不能做什么</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>页面和前端状态</td>
+                  <td><code>components/chat-playground.tsx</code></td>
+                  <td>
+                    表单、模式选择、提交状态、展示 streamed answer 和 steps。
+                  </td>
+                  <td>不读环境变量，不创建 SDK client，不执行工具。</td>
+                </tr>
+                <tr>
+                  <td>浏览器 API Client</td>
+                  <td><code>lib/agent-api-client.ts</code></td>
+                  <td>封装 fetch 和 SSE 解析，把未知响应转成前端可用事件。</td>
+                  <td>不理解 provider wire 格式，不参与 agent loop。</td>
+                </tr>
+                <tr>
+                  <td>Route Handler</td>
+                  <td>
+                    <code>app/api/agent/route.ts</code><br /><code
+                      >app/api/agent/stream/route.ts</code
+                    >
+                  </td>
+                  <td>
+                    读取请求、解析 JSON、调用 input parser、读取 config、调用
+                    service、返回 JSON 或 SSE。
+                  </td>
+                  <td>不放 prompt 逻辑，不执行工具，不直接调用 OpenAI。</td>
+                </tr>
+                <tr>
+                  <td>Input Boundary</td>
+                  <td><code>lib/agent-input.ts</code></td>
+                  <td>
+                    Zod 校验，把 <code>unknown</code> 请求体变成稳定
+                    <code>AgentInput</code>。
+                  </td>
+                  <td>不做业务流程，不调用模型。</td>
+                </tr>
+                <tr>
+                  <td>Agent Service</td>
+                  <td><code>lib/agent.ts</code></td>
+                  <td>
+                    编排 prompt、history、sampling loop、tool
+                    batch、steps、最终结果。
+                  </td>
+                  <td>
+                    不导入 provider SDK 原始类型，不知道 Chat/Responses 差异。
+                  </td>
+                </tr>
+                <tr>
+                  <td>Run Context</td>
+                  <td><code>lib/agent-run-context.ts</code></td>
+                  <td>
+                    承载 runId、AbortSignal、run policy，提供 cancellation
+                    check。
+                  </td>
+                  <td>不持有模型历史，不执行工具。</td>
+                </tr>
+                <tr>
+                  <td>Model IR</td>
+                  <td><code>lib/agent-model-types.ts</code></td>
+                  <td>
+                    定义 provider-neutral message、tool、stream event、usage
+                    snapshot。
+                  </td>
+                  <td>不出现 OpenAI/Anthropic wire 字段。</td>
+                </tr>
+                <tr>
+                  <td>Model Gateway</td>
+                  <td><code>lib/model-gateway.ts</code></td>
+                  <td>创建 SDK client，选择 dialect，把请求转给 provider。</td>
+                  <td>不解析每种 provider 的细节。</td>
+                </tr>
+                <tr>
+                  <td>Provider Dialect</td>
+                  <td>
+                    <code>lib/openai-chat-completions-dialect.ts</code
+                    ><br /><code>lib/openai-responses-dialect.ts</code>
+                  </td>
+                  <td>
+                    把 Agent IR 编译到 provider wire API，再把 provider stream
+                    解析回统一事件。
+                  </td>
+                  <td>不执行 agent loop，不执行工具。</td>
+                </tr>
+                <tr>
+                  <td>Tool Scheduler</td>
+                  <td><code>lib/agent-tool-scheduler.ts</code></td>
+                  <td>
+                    决定一个 batch 是并行还是串行，保证 tool output 顺序稳定。
+                  </td>
+                  <td>不猜数据依赖，不解析工具参数。</td>
+                </tr>
+                <tr>
+                  <td>Tool Runtime</td>
+                  <td><code>lib/agent-tool-runtime.ts</code></td>
+                  <td>
+                    查 registry、做 permission decision、发 tool events、执行
+                    handler、把错误转成 tool result。
+                  </td>
+                  <td>不直接写模型历史，不决定下一轮模型是否继续。</td>
+                </tr>
+                <tr>
+                  <td>Tool Registry</td>
+                  <td>
+                    <code>lib/agent-tools.ts</code><br /><code
+                      >lib/agent-workspace-tools.ts</code
+                    >
+                  </td>
+                  <td>
+                    声明工具契约、annotations、inputSchema、Zod parsing、具体
+                    handler。
+                  </td>
+                  <td>
+                    不决定 provider wire 格式，不决定全局 approval policy。
+                  </td>
+                </tr>
+                <tr>
+                  <td>Session Store</td>
+                  <td><code>lib/agent-session-store.ts</code></td>
+                  <td>把 streaming run 写成 append-only JSONL。</td>
+                  <td>现在还不做 resume 或 compaction。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="files">
+          <h2>代码地图</h2>
+          <p class="lead">这些是你理解当前 Agent 能力时最值得打开的文件。</p>
+          <ul class="file-list">
+            <li>
+              <a href="../lib/agent.ts"><code>lib/agent.ts</code></a
+              >，主 loop 和 step 生成。
+            </li>
+            <li>
+              <a href="../lib/agent-model-types.ts"
+                ><code>lib/agent-model-types.ts</code></a
+              >，provider-neutral 模型 IR。
+            </li>
+            <li>
+              <a href="../lib/agent-response-items.ts"
+                ><code>lib/agent-response-items.ts</code></a
+              >，模型可见 history。
+            </li>
+            <li>
+              <a href="../lib/model-gateway.ts"
+                ><code>lib/model-gateway.ts</code></a
+              >，dialect 选择。
+            </li>
+            <li>
+              <a href="../lib/openai-chat-completions-dialect.ts"
+                ><code>lib/openai-chat-completions-dialect.ts</code></a
+              >，Chat Completions adapter。
+            </li>
+            <li>
+              <a href="../lib/openai-responses-dialect.ts"
+                ><code>lib/openai-responses-dialect.ts</code></a
+              >，Responses adapter。
+            </li>
+            <li>
+              <a href="../lib/agent-tool-runtime.ts"
+                ><code>lib/agent-tool-runtime.ts</code></a
+              >，工具执行生命周期。
+            </li>
+            <li>
+              <a href="../lib/agent-tool-scheduler.ts"
+                ><code>lib/agent-tool-scheduler.ts</code></a
+              >，并行和串行调度。
+            </li>
+            <li>
+              <a href="../lib/agent-workspace-tools.ts"
+                ><code>lib/agent-workspace-tools.ts</code></a
+              >，workspace read tools。
+            </li>
+            <li>
+              <a href="../lib/agent-events.ts"
+                ><code>lib/agent-events.ts</code></a
+              >，runtime event 和 derived state。
+            </li>
+            <li>
+              <a href="../lib/agent-stream-projection.ts"
+                ><code>lib/agent-stream-projection.ts</code></a
+              >，runtime event 到 SSE contract。
+            </li>
+            <li>
+              <a href="../lib/agent-session-store.ts"
+                ><code>lib/agent-session-store.ts</code></a
+              >，JSONL rollout。
+            </li>
+            <li>
+              <a href="../tests/agent-sampling-loop.test.ts"
+                ><code>tests/agent-sampling-loop.test.ts</code></a
+              >，loop contract 测试。
+            </li>
+            <li>
+              <a href="../tests/agent-workspace-tools.test.ts"
+                ><code>tests/agent-workspace-tools.test.ts</code></a
+              >，workspace tools 真测试。
+            </li>
+          </ul>
+        </section>
+
+        <section id="stream-flow">
+          <h2>流式 Agent 数据链路</h2>
+          <p class="lead">
+            这是从浏览器点击提交到最终答案返回的完整链路。读这个时重点看数据在每一层变成什么。
+          </p>
+
+          <div class="flow">
+            <div class="flow-step">
+              <div class="num">1</div>
+              <div class="flow-body">
+                <h3>用户提交任务</h3>
+                <p>
+                  React 组件收集
+                  <code>task / goal / context / model / temperature</code>，创建
+                  <code>AbortController</code>。
+                </p>
+                <p>数据形态：浏览器里的表单状态。</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">2</div>
+              <div class="flow-body">
+                <h3>浏览器 client 发起 SSE 请求</h3>
+                <p>
+                  <code>lib/agent-api-client.ts</code> 调用
+                  <code>POST /api/agent/stream</code>，并逐行解析 SSE。
+                </p>
+                <p>数据形态：HTTP request body，之后变成前端事件 callback。</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">3</div>
+              <div class="flow-body">
+                <h3>Route 做边界处理</h3>
+                <p>
+                  <code>app/api/agent/stream/route.ts</code> 读取 JSON，调用
+                  <code>parseAgentInput</code>，读取 model config，然后进入
+                  <code>runAgentStream</code>。
+                </p>
+                <p>
+                  数据形态：<code>unknown</code> 请求体变成已校验的
+                  <code>AgentInput</code>。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">4</div>
+              <div class="flow-body">
+                <h3>创建 run context 和 session</h3>
+                <p>
+                  <code>runAgentStream</code> 创建
+                  <code>AgentRunContext</code> 和 JSONL session，写入
+                  <code>session_meta</code>、<code>turn_context</code>。
+                </p>
+                <p>数据形态：运行时上下文、append-only session 文件。</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">5</div>
+              <div class="flow-body">
+                <h3>构造初始模型历史</h3>
+                <p>
+                  把系统提示和用户任务变成 <code>AgentResponseItem[]</code>。
+                </p>
+                <p>
+                  数据形态：<code>message(system)</code> 和
+                  <code>message(user)</code>，它们会被持久化为
+                  <code>response_item</code>。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">6</div>
+              <div class="flow-body">
+                <h3>进入 sampling round</h3>
+                <p>
+                  <code>responseItemsToModelMessages</code> 把 history 转成
+                  <code>AgentModelMessage[]</code>。
+                </p>
+                <p>
+                  数据形态：provider-neutral model request，包括
+                  messages、tools、toolChoice、temperature。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">7</div>
+              <div class="flow-body">
+                <h3>Dialect 编译 provider 请求</h3>
+                <p>
+                  OpenAI Chat dialect 把 tools 编译成
+                  <code>{ type: "function", function: ... }</code>；Responses
+                  dialect 编译成
+                  <code>{ type: "function", name, parameters, strict }</code>。
+                </p>
+                <p>
+                  数据形态：provider wire request。runtime 本身不知道这个格式。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">8</div>
+              <div class="flow-body">
+                <h3>Provider stream 变成统一事件</h3>
+                <p>
+                  Dialect 把原始 stream chunk 转成
+                  <code>AgentModelStreamEvent</code
+                  >：<code>text_delta</code>、<code>assistant_message_done</code>、<code>tool_call_delta</code>、<code>tool_call_committed</code>、<code>completed</code>。
+                </p>
+                <p>数据形态：provider-neutral stream event。</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">9</div>
+              <div class="flow-body">
+                <h3>runtime 发内部事件</h3>
+                <p>
+                  <code>text_delta</code> 会变成
+                  <code>assistant_delta</code>，同时累积本轮的 assistant text。
+                </p>
+                <p>
+                  数据形态：<code>AgentEvent</code>。stream route 再投影成前端
+                  SSE 的 <code>assistantDelta</code>。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">10</div>
+              <div class="flow-body">
+                <h3>round 结束后做决策</h3>
+                <p>
+                  如果本轮有
+                  <code>tool_call_committed</code>，它是工作轮；如果没有 tool
+                  call，它就是最终答案轮。
+                </p>
+                <p>
+                  数据形态：<code>SamplingRoundResult</code>，包含
+                  assistantMessages、toolCalls、usage。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">11</div>
+              <div class="flow-body">
+                <h3>工具轮执行工具</h3>
+                <p>
+                  runtime 写入 working assistant message 和
+                  function_call，然后调度工具 batch。tool runtime 负责
+                  permission、started、finished、错误转 tool output。
+                </p>
+                <p>
+                  数据形态：<code>function_call</code> 和
+                  <code>function_call_output</code> 进入 history。
+                </p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">12</div>
+              <div class="flow-body">
+                <h3>继续或结束</h3>
+                <p>
+                  有工具结果就进入下一轮模型调用；没有工具调用的 round 直接把
+                  committed assistant text 当最终答案。
+                </p>
+                <p>
+                  数据形态：<code>AgentResult</code>，包含
+                  answer、steps、usage。
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="sampling">
+          <h2>Sampling Loop：为什么它不是普通 while</h2>
+          <p class="lead">
+            这里的 sampling 指“一次模型生成调用”。Sampling loop 指“模型生成 ->
+            可能执行工具 -> 带着工具结果继续生成”的循环。
+          </p>
+          <div class="grid">
+            <div class="panel">
+              <h3>Sampling Round</h3>
+              <p>
+                一次 round 只负责消费一次模型 stream。它不执行工具，只收集结果。
+              </p>
+              <pre><code>stream model
+collect text_delta
+collect assistant_message_done
+collect tool_call_committed
+collect completed usage
+return SamplingRoundResult</code></pre>
+            </div>
+            <div class="panel">
+              <h3>Sampling Loop</h3>
+              <p>
+                loop 负责根据 round result 改写
+                history、执行工具、决定是否继续。
+              </p>
+              <pre><code>for round in 1..MAX_AGENT_ROUNDS:
+  roundResult = runSamplingRound(history)
+  if roundResult.toolCalls is empty:
+    append final assistant message
+    return final answer
+  append working message + function_call
+  execute tool batch
+  append function_call_output
+  continue</code></pre>
+            </div>
+          </div>
+          <div class="note">
+            <strong>关键点：</strong>
+            最终答案不是额外补一次模型调用生成的。最后一个没有 tool call 的
+            sampling round，本身就是最终答案 round。这个设计来自我们对 Codex CLI
+            和 pi-mono 的对照调研。
+          </div>
+        </section>
+
+        <section id="history">
+          <h2>模型可见历史：AgentResponseItem</h2>
+          <p class="lead">
+            当前 runtime 的核心资产不是 UI step，而是 provider-neutral
+            的模型可见 history。它决定下一轮模型实际能看到什么。
+          </p>
+          <pre><code>type AgentResponseItem =
+  | {
+      type: 'message';
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      providerPhase?: 'commentary' | 'final_answer' | null;
+      runtimeRole?: 'working_message' | 'final_response';
+    }
+  | {
+      type: 'function_call';
+      callId: string;
+      name: string;
+      argumentsJson: string;
+    }
+  | {
+      type: 'function_call_output';
+      callId: string;
+      toolName: string;
+      output: string;
+      isError: boolean;
+    };</code></pre>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>什么时候产生</th>
+                  <th>下一轮模型是否可见</th>
+                  <th>为什么重要</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>message(system)</code></td>
+                  <td>run 开始时创建。</td>
+                  <td>可见</td>
+                  <td>约束 agent 行为、工具使用策略、回答语言。</td>
+                </tr>
+                <tr>
+                  <td><code>message(user)</code></td>
+                  <td>把 <code>AgentInput</code> 组装成 prompt 后创建。</td>
+                  <td>可见</td>
+                  <td>承载用户任务、目标和上下文。</td>
+                </tr>
+                <tr>
+                  <td><code>message(assistant)</code></td>
+                  <td>模型完成一条 assistant message 后提交。</td>
+                  <td>可见</td>
+                  <td>
+                    可能是工作说明，也可能是最终答案，取决于同一 round 是否有
+                    tool call。
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>function_call</code></td>
+                  <td>模型提交工具调用后创建。</td>
+                  <td>可见</td>
+                  <td>保持模型自己请求过什么工具的完整上下文。</td>
+                </tr>
+                <tr>
+                  <td><code>function_call_output</code></td>
+                  <td>工具执行完后创建。</td>
+                  <td>可见</td>
+                  <td>模型下一轮据此继续推理、重试或最终回答。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="events">
+          <h2>事件和前端投影</h2>
+          <p class="lead">
+            内部 runtime event 是事实记录，前端 SSE event
+            是展示协议。两者分离后，后端可以继续进化，而前端只观察必要事件。
+          </p>
+          <div class="grid">
+            <div class="panel">
+              <h3>内部 AgentEvent</h3>
+              <pre><code>run_started
+model_started
+assistant_delta
+tool_requested
+tool_permission_decided
+tool_started
+tool_finished
+step_created
+run_succeeded
+run_failed
+run_cancelled</code></pre>
+            </div>
+            <div class="panel">
+              <h3>前端 SSE 投影</h3>
+              <pre><code>step_created -> step
+assistant_delta -> assistantDelta
+run_succeeded -> done
+run_failed -> error</code></pre>
+              <p>
+                工具生命周期事件目前只在服务端日志和 JSONL session
+                中保留，还没有投影到 UI。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="provider">
+          <h2>Provider Dialect：模型供应商怎么接进来</h2>
+          <p class="lead">
+            runtime 只认 Agent IR。不同模型 API 的差异在 dialect 里解决。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent IR</th>
+                  <th>OpenAI Chat Completions</th>
+                  <th>OpenAI Responses</th>
+                  <th>未来 Anthropic</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>AgentModelMessage[]</code></td>
+                  <td><code>messages</code></td>
+                  <td><code>input</code></td>
+                  <td><code>messages</code> + 独立 system</td>
+                </tr>
+                <tr>
+                  <td><code>AgentModelToolDefinition.inputSchema</code></td>
+                  <td><code>function.parameters</code></td>
+                  <td><code>parameters</code></td>
+                  <td><code>input_schema</code></td>
+                </tr>
+                <tr>
+                  <td><code>schemaStrict</code></td>
+                  <td><code>function.strict</code></td>
+                  <td><code>strict</code></td>
+                  <td>忽略或映射成兼容策略</td>
+                </tr>
+                <tr>
+                  <td><code>text_delta</code></td>
+                  <td><code>delta.content</code></td>
+                  <td><code>response.output_text.delta</code></td>
+                  <td>text delta block</td>
+                </tr>
+                <tr>
+                  <td><code>tool_call_delta</code></td>
+                  <td>
+                    <code>delta.tool_calls[index].function.arguments</code>
+                  </td>
+                  <td><code>response.function_call_arguments.delta</code></td>
+                  <td>tool_use input delta</td>
+                </tr>
+                <tr>
+                  <td><code>tool_call_committed</code></td>
+                  <td><code>finish_reason="tool_calls"</code> 后重组</td>
+                  <td><code>response.output_item.done(function_call)</code></td>
+                  <td>完整 tool_use block</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note">
+            <strong>为什么刚改成 inputSchema/schemaStrict：</strong>
+            这让工具契约属于 agent runtime，而不是 OpenAI。OpenAI dialect
+            只是把它翻译成
+            <code>parameters/strict</code>。以后 Anthropic dialect 可以翻译成
+            <code>input_schema</code>，不用污染 runtime。
+          </div>
+          <div class="note">
+            <strong>OpenAI strict schema 的特殊规则：</strong>
+            OpenAI 要求 strict tool schema 里每个
+            <code>properties</code> 字段都出现在
+            <code>required</code> 中，optional 字段用
+            <code>type: ["number", "null"]</code>
+            这类形式表达。这个转换由
+            <code>lib/openai-tool-schema.ts</code> 在 OpenAI dialect
+            边界完成；runtime 的 Zod 解析再把 optional 的
+            <code>null</code> 归一成 <code>undefined</code>。
+          </div>
+        </section>
+
+        <section id="tools">
+          <h2>工具系统：现在有哪些能力</h2>
+          <p class="lead">
+            工具系统当前重点是 workspace 只读探查。我们故意还没有做 bash 和
+            edit，因为它们会引入 sandbox、审批、并发写入和进程管理复杂度。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>工具</th>
+                  <th>参数</th>
+                  <th>输出</th>
+                  <th>安全边界</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>inspect_text</code></td>
+                  <td><code>text</code></td>
+                  <td>字符数、行数、词数、preview。</td>
+                  <td>纯内存文本分析。</td>
+                </tr>
+                <tr>
+                  <td><code>ls</code></td>
+                  <td><code>path?</code>、<code>limit?</code></td>
+                  <td>目录 entries，按名称稳定排序。</td>
+                  <td>
+                    workspace root jail，忽略
+                    <code>.git</code
+                    >、<code>.next</code>、<code>node_modules</code>。
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>find</code></td>
+                  <td>
+                    <code>pattern</code>、<code>path?</code>、<code
+                      >limit?</code
+                    >
+                  </td>
+                  <td>匹配文件路径，limit notice。</td>
+                  <td>只递归 workspace 内文件，不跟随 symlink 逃逸。</td>
+                </tr>
+                <tr>
+                  <td><code>grep</code></td>
+                  <td>
+                    <code>pattern</code
+                    >、<code>path?</code>、<code>glob?</code>、<code>ignoreCase?</code>、<code>literal?</code>、<code
+                      >limit?</code
+                    >
+                  </td>
+                  <td>path、lineNumber、line，超限时给 refine notice。</td>
+                  <td>通过本机 <code>rg</code> 搜索 workspace 内文件。</td>
+                </tr>
+                <tr>
+                  <td><code>read</code></td>
+                  <td>
+                    <code>path</code>、<code>offset?</code>、<code>limit?</code>
+                  </td>
+                  <td>line metadata、content、pagination notice。</td>
+                  <td>只读 UTF-8 文本文件，50KB 输出上限。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>工具调用的数据链路</h3>
+          <pre><code>Model emits tool_call_committed
+  -> AgentResponseItem(function_call) is appended
+  -> AgentToolScheduler chooses parallel or sequential
+  -> AgentToolRuntime creates permission request
+  -> decideAgentToolPermission returns allow / ask / deny
+  -> concrete tool parses JSON arguments with Zod
+  -> handler returns AgentToolOutput or throws a typed tool error
+  -> runtime serializes AgentToolOutput into plain modelOutput text
+  -> AgentResponseItem(function_call_output.output = modelOutput) is appended
+  -> next model round sees the tool result</code></pre>
+
+          <h3>工具结果契约</h3>
+          <p>
+            工具内部结果是结构化的，但模型历史里的
+            <code>function_call_output.output</code>
+            永远是纯文本。这样模型不用解析
+            <code>{ok,error,details}</code>
+            这样的 envelope，UI 和日志又不会丢失结构化 details。
+          </p>
+          <pre><code>type AgentToolOutput =
+  | {
+      type: 'success';
+      contentText: string;   // 给模型看的正文
+      details?: unknown;     // 给 UI / 日志 / 测试看的结构
+      notice?: string;       // 序列化时追加成 [notice]
+    }
+  | {
+      type: 'respond_to_model';
+      error: { code: AgentToolErrorCode; message: string };
+      details?: unknown;
+    }
+  | {
+      type: 'fatal';
+      error: { code: AgentToolErrorCode; message: string };
+      details?: unknown;
+    };
+
+success          -> contentText + optional "\n\n[notice]"
+respond_to_model -> "Error [CODE]: message"
+fatal            -> terminate run, no function_call_output</code></pre>
+
+          <p>
+            <code>TIMEOUT</code> 和运行中的 <code>ABORTED</code>
+            会作为 recoverable tool output 写回
+            history，让下一轮模型知道工具没有正常完成。 这和 unknown
+            tool、参数错误、路径越界属于同一类：反馈给模型，而不是把整个 agent
+            loop 直接炸掉。
+          </p>
+
+          <h3>并行策略</h3>
+          <p>
+            当前 scheduler 不猜数据依赖。它只看工具 metadata：一个 batch
+            里的所有工具都声明
+            <code>executionMode="parallel"</code>，才用
+            <code>Promise.all</code> 并行执行。即使并行，输出也按模型原始 tool
+            call 顺序写回 history。
+          </p>
+        </section>
+
+        <section id="permissions">
+          <h2>权限骨架</h2>
+          <p class="lead">
+            权限还不是完整 sandbox，但已经有了正确的分层。工具声明事实，runtime
+            根据策略决策。
+          </p>
+          <div class="grid">
+            <div class="panel">
+              <h3>Tool Annotations</h3>
+              <pre><code>readOnly?: boolean
+destructive?: boolean
+openWorld?: boolean
+idempotent?: boolean</code></pre>
+              <p>
+                当前 workspace tools 都是
+                readOnly、non-destructive、closed-world、idempotent。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>Run Policy</h3>
+              <pre><code>approvalPolicy:
+  strict
+  on_request
+  never
+
+sandboxMode:
+  read_only
+  workspace_write
+  danger_full_access</code></pre>
+              <p>默认是 <code>on_request + read_only</code>。</p>
+            </div>
+          </div>
+          <p>
+            当前 <code>ask</code> 会发出
+            <code>approval_requested</code>，然后通过
+            <code>AgentApprovalRequiredError</code> fail closed。真正的 approval
+            resume 还没有实现。
+          </p>
+        </section>
+
+        <section id="sessions">
+          <h2>JSONL Session：为什么要记录过程</h2>
+          <p class="lead">
+            Session 文件不是普通日志。它是未来
+            resume、replay、debug、评测的基础。现在 streaming run 会写模型可见
+            history 和 runtime events。
+          </p>
+          <pre><code>{"type":"session_meta","payload":{"id":"...","cwd":"...","model":"..."}}
+{"type":"turn_context","payload":{"turnId":"...","wireApi":"openai-responses"}}
+{"type":"response_item","payload":{"type":"message","role":"system","content":"..."}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":"..."}}
+{"type":"agent_event","payload":{"type":"run_started","runId":"..."}}
+{"type":"response_item","payload":{"type":"function_call","name":"read","argumentsJson":"..."}}
+{"type":"response_item","payload":{"type":"function_call_output","toolName":"read","output":"File: ...","isError":false}}
+{"type":"agent_event","payload":{"type":"run_succeeded","result":{"answer":"..."}}}</code></pre>
+          <p>
+            当前有 <code>GET /api/agent/sessions</code> 和
+            <code>GET /api/agent/sessions/:id</code>
+            用于本地检查 session，但还没有 resume。
+          </p>
+        </section>
+
+        <section id="usage">
+          <h2>Token Usage：raw 和 normalized 同时保留</h2>
+          <p class="lead">
+            单次 token 数来自 provider，跨轮总数由 runtime 累加。缓存 token 用
+            <code>null</code> 表示 provider 没报告，而不是假装成 0。
+          </p>
+          <pre><code>type AgentTokenUsage = {
+  inputTokens: number;
+  cachedInputTokens: number | null;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+};</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>字段</th>
+                  <th>语义</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>rawUsage</code></td>
+                  <td>
+                    provider 原始 usage，保留细节，便于排查中转站或不同 API
+                    的字段差异。
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>tokenUsage</code></td>
+                  <td>runtime 统一后的 usage，供 UI 和总计使用。</td>
+                </tr>
+                <tr>
+                  <td><code>calls</code></td>
+                  <td>每一轮 sampling call 的 usage 记录。</td>
+                </tr>
+                <tr>
+                  <td><code>totalTokenUsage</code></td>
+                  <td>runtime 对所有有 usage 的 call 做聚合。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="evolution">
+          <h2>演化时间线</h2>
+          <p class="lead">
+            这个项目不是一次性设计出来的。它是从最小可运行模型调用，一层一层把真实
+            agent 需要的边界补出来。
+          </p>
+          <div class="timeline">
+            <div class="time-item">
+              <h3>Phase 0：OpenAI-compatible Chat API</h3>
+              <p>
+                先做最小可运行路径：route、input parser、env、SDK
+                client、service。目的不是 agent，而是先把后端分层立住。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 1：小型可检查 Agent</h3>
+              <p>
+                加入
+                <code>/api/agent</code
+                >、<code>/api/agent/stream</code>、<code>inspect_text</code>。这是
+                demo-shaped agent，让模型和工具链路先可见。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 2：结构化日志和 steps</h3>
+              <p>
+                加入 runId、prompt、step output、tool output
+                的服务端日志。我们开始能看见 runtime 做了什么。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 3：Streaming 输出</h3>
+              <p>
+                后端发 runtime event，route 投影成 SSE，前端只观察。<code
+                  >assistantDelta</code
+                >
+                代表 assistant 输出，不提前承诺 final。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 4：Cancellation Boundary</h3>
+              <p>
+                AbortController、fetch
+                signal、NextRequest.signal、AgentRunContext、SDK request options
+                串成真正的取消链。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 5：Harness Direction</h3>
+              <p>
+                明确模型不是 agent。Agent 是模型外面的 runtime
+                harness，负责工具、权限、事件、session、取消和未来 resume。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 6：Tool Runtime Boundary</h3>
+              <p>
+                工具执行从 <code>agent.ts</code> 拆到
+                <code>agent-tool-runtime.ts</code>，让编排和工具生命周期分离。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 7：Permission Skeleton</h3>
+              <p>
+                把 tool annotations、approval policy、sandbox mode
+                分开。现在只是骨架，但方向是对的。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 8：JSONL Session</h3>
+              <p>
+                引入 Codex-style rollout 的简化版。先记录事件，后来加入模型可见
+                <code>response_item</code>。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 9：Session Read APIs</h3>
+              <p>
+                增加 session list 和 detail API，便于不用手动翻文件也能检查
+                run。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 10：Usage Tracking</h3>
+              <p>
+                规范 token usage：provider raw usage 保留，runtime normalized
+                usage 用于汇总。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 11：Provider Dialect</h3>
+              <p>
+                把 OpenAI Chat/Responses 的差异关进 dialect，runtime 只消费
+                AgentModel IR。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 13：Agent Runtime Spine</h3>
+              <p>
+                固定两次调用被替换为真实 loop：history、tool call、tool
+                output、继续模型，直到没有 tool call。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 14：Streaming Sampling Loop</h3>
+              <p>
+                每一轮都改成 streaming sampling
+                round。最终答案来自最后一轮自然输出，不再额外总结调用。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 15：Assistant Message Commit</h3>
+              <p>
+                区分 <code>text_delta</code>、<code
+                  >assistant_message_done</code
+                >
+                和 round decision。流式过程可显示，round 结束后才判断是否
+                final。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 16：Deterministic Loop Tests</h3>
+              <p>
+                用 fake gateway 做模型无关测试，验证 history shape、protocol
+                error、tool loop。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 17：Workspace Read Tools</h3>
+              <p>
+                加入 <code>ls/find/grep/read</code>，不再只靠玩具工具。它们有
+                workspace jail、limit notice 和真实 runtime 测试。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 18：Agent-owned Tool Contract</h3>
+              <p>
+                工具 IR 从 OpenAI 字段名中抽出来，使用
+                <code>inputSchema/schemaStrict</code>。OpenAI dialect 再映射成
+                <code>parameters/strict</code>。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="decisions">
+          <h2>关键决策</h2>
+          <div class="grid">
+            <div class="panel">
+              <h3>为什么先做 read tools，不先做 bash</h3>
+              <p>
+                Bash 会立刻引入 OS
+                sandbox、审批、timeout、PTY、输出流、网络和写操作风险。read
+                tools 能先验证真实工具链路，又把安全面控制住。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>为什么不猜工具数据依赖</h3>
+              <p>
+                runtime 无法可靠知道 A 的输出是否被 B
+                依赖。模型需要依赖时，应分两轮请求。scheduler 只根据工具
+                metadata 决定一个已提交 batch 是否可并行。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>为什么保留 response_item</h3>
+              <p>
+                steps 是展示，response_item 是模型历史。未来
+                resume、compaction、replay 都依赖模型可见历史，而不是 UI
+                展示文本。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>为什么 final answer 不额外调用模型</h3>
+              <p>
+                成熟 agent 通常让模型在最后一个无工具调用 round
+                自然输出最终答案，UI
+                再做视觉区分。额外总结调用会增加延迟和语义不一致。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>为什么 dialect 是数据库方言式边界</h3>
+              <p>
+                runtime 的 IR 像查询 AST，不同 provider 像不同 SQL 方言。这样
+                Anthropic、OpenAI、兼容中转站都不会污染 agent loop。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>为什么 cached token 用 null</h3>
+              <p>
+                <code>0</code> 表示 provider 明确报告没有缓存命中，<code
+                  >null</code
+                >
+                表示 provider 没报告字段。这两个语义不能混。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="gaps">
+          <h2>还没做什么</h2>
+          <p class="lead">
+            这些不是失败项，而是后续扩展点。现阶段我们先把 spine 和 read-only
+            工具体系做稳。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>缺口</th>
+                  <th>为什么还没做</th>
+                  <th>依赖什么</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Anthropic dialect</td>
+                  <td>现在先把 Agent IR 和 OpenAI 两个 dialect 跑稳。</td>
+                  <td>
+                    更完整的 provider-neutral message/tool result 兼容层。
+                  </td>
+                </tr>
+                <tr>
+                  <td>Shell tool</td>
+                  <td>
+                    需要 process sandbox、timeout、output streaming、approval。
+                  </td>
+                  <td>真实 sandbox enforcement 和 approval resume。</td>
+                </tr>
+                <tr>
+                  <td>Write/Edit tools</td>
+                  <td>涉及文件写入、diff、回滚、冲突、用户确认。</td>
+                  <td>workspace_write sandbox 和更细的 permission policy。</td>
+                </tr>
+                <tr>
+                  <td>Interactive approval resume</td>
+                  <td>现在 <code>ask</code> 只能 fail closed。</td>
+                  <td>pending tool call 持久化、approval API、resume loop。</td>
+                </tr>
+                <tr>
+                  <td>Compaction</td>
+                  <td>当前 history 还短，先不引入摘要模型调用。</td>
+                  <td>token budget、replacement history、resume 重建。</td>
+                </tr>
+                <tr>
+                  <td>Replay / Eval</td>
+                  <td>需要稳定 session schema 和 deterministic fixtures。</td>
+                  <td>更多 JSONL 重放工具和结果断言。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="warning note">
+            <strong>当前 build 现实：</strong>
+            因为 workspace read tools 有意允许读取当前项目根目录，Next/Turbopack
+            build 会提示动态 filesystem tracing warning。构建通过，但这个
+            warning 说明未来如果要 serverless packaging，需要更明确地处理
+            workspace root 的打包边界。
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

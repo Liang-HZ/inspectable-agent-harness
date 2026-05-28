@@ -183,7 +183,7 @@ function createToolOutputItem(
     type: 'function_call_output',
     callId: execution.toolCallId,
     toolName: execution.toolName,
-    output: execution.result,
+    output: execution.modelOutput,
     isError: execution.isError,
   };
 }

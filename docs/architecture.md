@@ -93,6 +93,7 @@ lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Local agent tool registry and concrete handlers
 lib/agent-workspace-tools.ts        Read-only workspace file exploration tools
 lib/model-provider-dialect.ts       Provider dialect contract
+lib/openai-tool-schema.ts           OpenAI strict tool-schema adapter
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
 lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
 lib/model-gateway.ts                Provider dialect selection and model call boundary
@@ -270,6 +271,13 @@ Responses compile them to `parameters` and `strict`; a future Anthropic dialect
 would compile `inputSchema` to Anthropic's `input_schema` and either ignore or
 adapt `schemaStrict`.
 
+OpenAI strict function schemas have a provider-specific rule: every property
+must appear in `required`, and optional properties are represented by allowing
+`null` in the property type. `lib/openai-tool-schema.ts` performs that
+translation inside the OpenAI dialect boundary, so agent-owned schemas can stay
+readable and provider-neutral. Runtime Zod parsers normalize those strict-mode
+`null` values back to `undefined` for optional fields.
+
 `lib/model-provider-dialect.ts` owns the provider dialect contract.
 
 A dialect is responsible for compiling the agent model IR into one wire API and
@@ -419,8 +427,39 @@ It receives model tool calls, checks run cancellation, looks up tools by name in
 the registry, asks the permission runtime for a decision, emits tool runtime
 events, executes concrete tool handlers, and returns tool execution results.
 This keeps `lib/agent.ts` focused on orchestration instead of tool lifecycle
-details. Later versions can add tool timeouts, retries, interactive approval
-resume, and output validation at this boundary.
+details. It also owns the model-facing tool output serialization boundary:
+internal tool output is structured, but `function_call_output.output` is plain
+text. Later versions can add retries, interactive approval resume, and richer
+output validation at this boundary.
+
+Tool output uses three internal variants:
+
+```ts
+type AgentToolOutput =
+  | {
+      type: 'success';
+      contentText: string;
+      details?: unknown;
+      notice?: string;
+      truncated?: boolean;
+    }
+  | {
+      type: 'respond_to_model';
+      error: { code: AgentToolErrorCode; message: string };
+      details?: unknown;
+    }
+  | {
+      type: 'fatal';
+      error: { code: AgentToolErrorCode; message: string };
+      details?: unknown;
+    };
+```
+
+`success` and `respond_to_model` become ordered `function_call_output` records.
+`fatal` terminates the run and is not serialized as an ordinary tool result.
+Runtime timeout and in-flight abort become `respond_to_model` outputs with
+stable error codes. This mirrors the useful split from Codex and pi-mono:
+structured metadata remains internal, while the model sees low-friction text.
 
 `lib/agent-tools.ts` owns the local tool registry.
 
@@ -556,7 +595,7 @@ type AgentResponseItem =
       type: 'function_call_output';
       callId: string;
       toolName: string;
-      output: unknown;
+      output: string;
       isError: boolean;
     };
 ```
@@ -585,10 +624,13 @@ the first `function_call_output` is present in history. The scheduler only
 decides whether a single already-emitted batch is safe to run concurrently based
 on explicit tool metadata.
 
-Ordinary tool errors such as unknown tool names, invalid arguments, or handler
-exceptions become error-shaped `function_call_output` records. That keeps the
-model loop recoverable. Permission pauses and denied policy decisions remain
-fail-closed until approval resume exists.
+Ordinary tool errors such as unknown tool names, invalid arguments, path errors,
+timeouts, in-flight aborts, or handler exceptions become plain-text
+`function_call_output` records. The model sees text such as
+`Error [PATH_NOT_FOUND]: ...`, not an `ok/error` JSON envelope. That keeps the
+model loop recoverable while preserving structured `details` in runtime events
+and steps. Permission pauses and denied policy decisions remain fail-closed
+until approval resume exists.
 
 The first production-shaped tool foundation is read-only workspace exploration,
 not shell execution. The current tool set gives the model enough structure to
@@ -605,6 +647,11 @@ This keeps the safety boundary small while still exercising the same
 provider-neutral function-call path that future shell, edit, and MCP tools will
 use. `grep` depends on local `rg` and reports a model-visible tool error if it
 is unavailable.
+
+Each tool formats its own model-facing `contentText` because each tool knows its
+best readable shape. The runtime centrally appends optional notices and formats
+recoverable errors. Tool `details` keep structured data such as paths, line
+numbers, truncation flags, and match arrays for logs/UI/debugging.
 
 ## Streaming UI Flow
 
@@ -881,7 +928,7 @@ Example file:
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_started","runId":"..."}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"step_created","step":{...}}}
 {"timestamp":"...","type":"response_item","payload":{"type":"function_call","callId":"...","name":"inspect_text","argumentsJson":"..."}}
-{"timestamp":"...","type":"response_item","payload":{"type":"function_call_output","callId":"...","toolName":"inspect_text","output":{...},"isError":false}}
+{"timestamp":"...","type":"response_item","payload":{"type":"function_call_output","callId":"...","toolName":"inspect_text","output":"Character count: ...","isError":false}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_succeeded","result":{"usage":{"totalTokenUsage":{...},"lastTokenUsage":{...},"calls":[...]}}}}
 ```
 
@@ -928,8 +975,10 @@ tool name -> annotations -> input schema -> handler -> output schema
 ```
 
 The current registry includes the name, annotations, provider-neutral
-`inputSchema`, runtime input parsing, and handler. Output schema is the next
-part to add when the tool boundary needs stricter contracts.
+`inputSchema`, runtime input parsing, and handler. Handlers return structured
+`AgentToolOutput` values with model-facing `contentText` and internal `details`.
+Output schema is the next part to add when the tool boundary needs stricter
+typed contracts.
 
 ## Agent Harness Direction
 

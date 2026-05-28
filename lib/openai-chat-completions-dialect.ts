@@ -27,6 +27,7 @@ import type {
   ModelProviderDialect,
   ModelRequestOptions,
 } from './model-provider-dialect';
+import { toOpenAIStrictToolInputSchema } from './openai-tool-schema';
 
 function normalizeChatCompletionUsage(
   usage: CompletionUsage | null | undefined,
@@ -62,7 +63,9 @@ function toChatCompletionTool(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.inputSchema,
+      parameters: tool.schemaStrict
+        ? toOpenAIStrictToolInputSchema(tool.inputSchema)
+        : tool.inputSchema,
       strict: tool.schemaStrict,
     },
   };

@@ -27,6 +27,7 @@ import type {
   ModelProviderDialect,
   ModelRequestOptions,
 } from './model-provider-dialect';
+import { toOpenAIStrictToolInputSchema } from './openai-tool-schema';
 
 function normalizeResponsesUsage(
   usage: ResponseUsage | null | undefined,
@@ -58,7 +59,9 @@ function toResponsesTool(tool: AgentModelToolDefinition): FunctionTool {
     type: 'function',
     name: tool.name,
     description: tool.description,
-    parameters: tool.inputSchema,
+    parameters: tool.schemaStrict
+      ? toOpenAIStrictToolInputSchema(tool.inputSchema)
+      : tool.inputSchema,
     strict: tool.schemaStrict,
   };
 }
