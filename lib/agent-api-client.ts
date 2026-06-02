@@ -10,6 +10,7 @@ type AgentStreamCallbacks = {
   onAssistantDelta: (
     event: Extract<AgentStreamEvent, { type: 'assistantDelta' }>,
   ) => void;
+  onDebug: (event: Extract<AgentStreamEvent, { type: 'debug' }>) => void;
   onDone: (event: Extract<AgentStreamEvent, { type: 'done' }>) => void;
   onError: (event: Extract<AgentStreamEvent, { type: 'error' }>) => void;
 };
@@ -74,6 +75,7 @@ function readAgentStreamEvent(data: unknown): AgentStreamEvent | undefined {
   if (
     event.type === 'step' ||
     event.type === 'assistantDelta' ||
+    event.type === 'debug' ||
     event.type === 'done' ||
     event.type === 'error'
   ) {
@@ -94,6 +96,10 @@ function dispatchAgentStreamEvent(
 
     case 'assistantDelta':
       callbacks.onAssistantDelta(event);
+      return;
+
+    case 'debug':
+      callbacks.onDebug(event);
       return;
 
     case 'done':

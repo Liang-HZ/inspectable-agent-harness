@@ -1,3 +1,11 @@
+import type {
+  AgentToolCategory,
+  AgentToolExecutionMode,
+  AgentToolGroupName,
+  AgentToolSource,
+} from './agent-tool-contracts';
+import type { AgentToolPathAccessPolicy } from './agent-path-policy';
+
 export type AgentToolAnnotations = {
   readOnly?: boolean;
   destructive?: boolean;
@@ -30,6 +38,11 @@ export type AgentPermissionRequest = {
   toolName: string;
   argumentsJson: string;
   annotations: AgentToolAnnotations;
+  source: AgentToolSource;
+  group: AgentToolGroupName;
+  category: AgentToolCategory;
+  pathAccess: AgentToolPathAccessPolicy;
+  executionMode: AgentToolExecutionMode;
   approvalPolicy: AgentApprovalPolicy;
   sandboxMode: AgentSandboxMode;
 };

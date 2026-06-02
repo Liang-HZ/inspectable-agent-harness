@@ -1,12 +1,13 @@
 export type AgentToolErrorCode =
   | 'TOOL_NOT_FOUND'
   | 'VALIDATION_ERROR'
-  | 'PATH_OUTSIDE_WORKSPACE'
+  | 'PATH_OUTSIDE_ALLOWED_ROOT'
   | 'PATH_NOT_FOUND'
   | 'NOT_A_FILE'
   | 'NOT_A_DIRECTORY'
   | 'TIMEOUT'
   | 'ABORTED'
+  | 'REPEATED_TOOL_CALL'
   | 'EXECUTION_ERROR';
 
 export type AgentToolError = {

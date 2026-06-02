@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 
-import type { AgentModelCallUsage, AgentStep } from '../lib/agent-api-types';
+import type {
+  AgentDebugStreamEvent,
+  AgentModelCallUsage,
+  AgentStep,
+} from '../lib/agent-api-types';
 import { runSamplingLoop } from '../lib/agent';
 import type { AgentInput } from '../lib/agent-input';
 import type { AgentModelStreamEvent } from '../lib/agent-model-types';
@@ -79,6 +83,7 @@ async function runLoopWithFakeGateway(rounds: AgentModelStreamEvent[][]) {
   const history = initialHistory();
   const steps: AgentStep[] = [];
   const events: AgentEvent[] = [];
+  const debugEvents: AgentDebugStreamEvent[] = [];
   const modelCallUsages: AgentModelCallUsage[] = [];
   const result = await runSamplingLoop(
     createFakeGateway(rounds),
@@ -89,6 +94,7 @@ async function runLoopWithFakeGateway(rounds: AgentModelStreamEvent[][]) {
     modelCallUsages,
     undefined,
     (event) => events.push(event),
+    (event) => debugEvents.push(event),
   );
 
   return {
@@ -96,6 +102,7 @@ async function runLoopWithFakeGateway(rounds: AgentModelStreamEvent[][]) {
     history: history,
     steps: steps,
     events: events,
+    debugEvents: debugEvents,
     modelCallUsages: modelCallUsages,
   };
 }
@@ -135,6 +142,12 @@ test('uses a no-tool assistant message as the final response', async () => {
     },
   ]);
   assert.deepEqual(
+    output.debugEvents
+      .filter((event) => event.type === 'historyCommitted')
+      .map((event) => event.items),
+    [output.history.slice(2)],
+  );
+  assert.deepEqual(
     output.events
       .filter((event) => event.type === 'assistant_delta')
       .map((event) => event.delta),
@@ -145,10 +158,10 @@ test('uses a no-tool assistant message as the final response', async () => {
 test('records working message, function call, tool output, and final response', async () => {
   const output = await runLoopWithFakeGateway([
     [
-      { type: 'text_delta', delta: 'Checking text.' },
+      { type: 'text_delta', delta: 'Reading project file.' },
       {
         type: 'assistant_message_done',
-        message: { text: 'Checking text.', providerPhase: null },
+        message: { text: 'Reading project file.', providerPhase: null },
       },
       {
         type: 'tool_call_delta',
@@ -156,24 +169,33 @@ test('records working message, function call, tool output, and final response', 
         itemId: 'item-1',
         toolCallId: undefined,
         name: undefined,
-        delta: '{"text":"hello world"}',
+        delta: JSON.stringify({
+          path: 'tests/fixtures/builtin-tools/src/example.ts',
+          limit: 20,
+        }),
       },
       {
         type: 'tool_call_committed',
         toolCall: {
           id: 'call-1',
-          name: 'inspect_text',
-          argumentsJson: JSON.stringify({ text: 'hello world' }),
+          name: 'read',
+          argumentsJson: JSON.stringify({
+            path: 'tests/fixtures/builtin-tools/src/example.ts',
+            limit: 20,
+          }),
         },
       },
       { type: 'completed', model: 'fake-model', usage: usage },
     ],
     [
-      { type: 'text_delta', delta: 'The text has 11 characters.' },
+      {
+        type: 'text_delta',
+        delta: 'The file exports meaningfulFunction.',
+      },
       {
         type: 'assistant_message_done',
         message: {
-          text: 'The text has 11 characters.',
+          text: 'The file exports meaningfulFunction.',
           providerPhase: null,
         },
       },
@@ -181,7 +203,7 @@ test('records working message, function call, tool output, and final response', 
     ],
   ]);
 
-  assert.equal(output.result.answer, 'The text has 11 characters.');
+  assert.equal(output.result.answer, 'The file exports meaningfulFunction.');
   assert.equal(output.result.usedTool, true);
   assert.equal(output.steps.length, 1);
   assert.equal(output.steps[0].title, 'Run local tool');
@@ -191,34 +213,53 @@ test('records working message, function call, tool output, and final response', 
   assert.deepEqual(responseItems[0], {
     type: 'message',
     role: 'assistant',
-    content: 'Checking text.',
+    content: 'Reading project file.',
     providerPhase: null,
     runtimeRole: 'working_message',
   });
   assert.deepEqual(responseItems[1], {
     type: 'function_call',
     callId: 'call-1',
-    name: 'inspect_text',
-    argumentsJson: JSON.stringify({ text: 'hello world' }),
+    name: 'read',
+    argumentsJson: JSON.stringify({
+      path: 'tests/fixtures/builtin-tools/src/example.ts',
+      limit: 20,
+    }),
   });
   assert.deepEqual(responseItems[2], {
     type: 'function_call_output',
     callId: 'call-1',
-    toolName: 'inspect_text',
+    toolName: 'read',
     output:
-      'Character count: 11\nLine count: 1\nWord count: 2\nPreview: hello world',
+      "File: tests/fixtures/builtin-tools/src/example.ts\nLines: 1-6 of 6\n\nexport function meaningfulFunction(): string {\n  return 'built-in tool fixture';\n}\n\nexport const sharedMarker = 'builtin-search-marker';\n",
     isError: false,
   });
   assert.deepEqual(responseItems[3], {
     type: 'message',
     role: 'assistant',
-    content: 'The text has 11 characters.',
+    content: 'The file exports meaningfulFunction.',
     providerPhase: null,
     runtimeRole: 'final_response',
   });
+  assert.deepEqual(
+    output.debugEvents
+      .filter((event) => event.type === 'historyCommitted')
+      .map((event) => event.items),
+    [
+      [responseItems[0], responseItems[1]],
+      [responseItems[2]],
+      [responseItems[3]],
+    ],
+  );
+  assert.equal(
+    output.events.some(
+      (event) => (event as { type: string }).type === 'history_committed',
+    ),
+    false,
+  );
 });
 
-test('records workspace read tool output through the sampling loop', async () => {
+test('records built-in read tool output through the sampling loop', async () => {
   const output = await runLoopWithFakeGateway([
     [
       { type: 'text_delta', delta: 'Reading the file.' },
@@ -233,7 +274,7 @@ test('records workspace read tool output through the sampling loop', async () =>
         toolCallId: undefined,
         name: undefined,
         delta: JSON.stringify({
-          path: 'tests/fixtures/workspace-tools/src/example.ts',
+          path: 'tests/fixtures/builtin-tools/src/example.ts',
           limit: 20,
         }),
       },
@@ -243,7 +284,7 @@ test('records workspace read tool output through the sampling loop', async () =>
           id: 'call-read-1',
           name: 'read',
           argumentsJson: JSON.stringify({
-            path: 'tests/fixtures/workspace-tools/src/example.ts',
+            path: 'tests/fixtures/builtin-tools/src/example.ts',
             limit: 20,
           }),
         },
@@ -277,9 +318,99 @@ test('records workspace read tool output through the sampling loop', async () =>
   assert.equal(typeof toolOutput.output, 'string');
   assert.match(
     toolOutput.output,
-    /File: tests\/fixtures\/workspace-tools\/src\/example\.ts/,
+    /File: tests\/fixtures\/builtin-tools\/src\/example\.ts/,
   );
   assert.match(toolOutput.output, /meaningfulFunction/);
+});
+
+test('allows more than five tool rounds before the final response', async () => {
+  const rounds: AgentModelStreamEvent[][] = [];
+
+  for (let index = 1; index <= 6; index += 1) {
+    rounds.push([
+      {
+        type: 'tool_call_committed',
+        toolCall: {
+          id: `call-read-${index}`,
+          name: 'read',
+          argumentsJson: JSON.stringify({
+            path: 'tests/fixtures/builtin-tools/src/example.ts',
+            offset: index,
+            limit: 1,
+          }),
+        },
+      },
+      { type: 'completed', model: 'fake-model', usage: usage },
+    ]);
+  }
+
+  rounds.push([
+    {
+      type: 'text_delta',
+      delta: 'Finished after six file reads.',
+    },
+    {
+      type: 'assistant_message_done',
+      message: {
+        text: 'Finished after six file reads.',
+        providerPhase: null,
+      },
+    },
+    { type: 'completed', model: 'fake-model', usage: usage },
+  ]);
+
+  const output = await runLoopWithFakeGateway(rounds);
+
+  assert.equal(output.result.answer, 'Finished after six file reads.');
+  assert.equal(output.result.usedTool, true);
+  assert.equal(
+    output.history.filter((item) => item.type === 'function_call_output')
+      .length,
+    6,
+  );
+});
+
+test('stops repeated identical tool-call loops without a global round limit', async () => {
+  const repeatedReadRound = (callId: string): AgentModelStreamEvent[] => [
+    {
+      type: 'tool_call_committed',
+      toolCall: {
+        id: callId,
+        name: 'read',
+        argumentsJson: JSON.stringify({
+          path: 'tests/fixtures/builtin-tools/src/example.ts',
+          limit: 20,
+        }),
+      },
+    },
+    { type: 'completed', model: 'fake-model', usage: usage },
+  ];
+  const history = initialHistory();
+
+  await assert.rejects(
+    () =>
+      runSamplingLoop(
+        createFakeGateway([
+          repeatedReadRound('call-repeat-1'),
+          repeatedReadRound('call-repeat-2'),
+          repeatedReadRound('call-repeat-3'),
+          repeatedReadRound('call-repeat-4'),
+        ]),
+        baseInput,
+        createAgentRunContext({ runId: 'test-run' }),
+        history,
+        [],
+        [],
+        undefined,
+        undefined,
+        undefined,
+      ),
+    /same `read` tool call with the same result more than 3 times/,
+  );
+  assert.equal(
+    history.filter((item) => item.type === 'function_call_output').length,
+    4,
+  );
 });
 
 test('serializes recoverable tool errors as plain model-visible text', async () => {
@@ -296,11 +427,14 @@ test('serializes recoverable tool errors as plain model-visible text', async () 
       { type: 'completed', model: 'fake-model', usage: usage },
     ],
     [
-      { type: 'text_delta', delta: 'The path is outside the workspace.' },
+      {
+        type: 'text_delta',
+        delta: 'The path is outside the current allowed root.',
+      },
       {
         type: 'assistant_message_done',
         message: {
-          text: 'The path is outside the workspace.',
+          text: 'The path is outside the current allowed root.',
           providerPhase: null,
         },
       },
@@ -317,7 +451,7 @@ test('serializes recoverable tool errors as plain model-visible text', async () 
   assert.equal(toolOutput?.type, 'function_call_output');
   assert.equal(toolOutput?.isError, true);
   assert.equal(typeof toolOutput.output, 'string');
-  assert.match(toolOutput.output, /^Error \[PATH_OUTSIDE_WORKSPACE\]:/);
+  assert.match(toolOutput.output, /^Error \[PATH_OUTSIDE_ALLOWED_ROOT\]:/);
 });
 
 test('rejects streamed text without an assistant message commit', async () => {

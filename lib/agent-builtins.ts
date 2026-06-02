@@ -8,12 +8,20 @@ import {
   AgentToolRespondToModelError,
   createSuccessToolOutput,
 } from './agent-tool-output';
-import type { AgentToolDefinition, AgentToolResult } from './agent-tools';
+import {
+  DEFAULT_AGENT_TOOL_TIMEOUT_MS,
+  type AgentToolCategory,
+  type AgentToolDefinition,
+  type AgentToolResult,
+} from './agent-tool-contracts';
+import {
+  assertAgentPathAllowedByPolicy,
+  currentProjectPathAccessPolicy,
+  displayAgentToolPath,
+  resolveAgentToolPath,
+  type ResolvedAgentToolPath,
+} from './agent-path-policy';
 
-const WORKSPACE_ROOT = path.join(
-  /* turbopackIgnore: true */ process.cwd(),
-  '.',
-);
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.next', 'node_modules']);
 const DEFAULT_READ_LINE_LIMIT = 200;
 const MAX_READ_LINE_LIMIT = 2000;
@@ -23,11 +31,6 @@ const DEFAULT_GREP_LIMIT = 100;
 const MAX_GREP_LIMIT = 1000;
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const GREP_MAX_LINE_LENGTH = 500;
-
-type WorkspacePath = {
-  absolutePath: string;
-  relativePath: string;
-};
 
 type DirectoryEntryType = 'directory' | 'file' | 'symlink' | 'other';
 
@@ -139,26 +142,49 @@ type ListInput = z.infer<typeof listInputSchema>;
 type FindInput = z.infer<typeof findInputSchema>;
 type GrepInput = z.infer<typeof grepInputSchema>;
 
+function createBuiltinReadOnlyToolBase(category: AgentToolCategory) {
+  return {
+    source: 'builtin',
+    group: 'read_only_builtins',
+    category: category,
+    annotations: {
+      readOnly: true,
+      destructive: false,
+      openWorld: false,
+      idempotent: true,
+    },
+    executionMode: 'parallel',
+    timeoutMs: DEFAULT_AGENT_TOOL_TIMEOUT_MS,
+    abortable: true,
+    pathAccess: currentProjectPathAccessPolicy,
+  } satisfies Pick<
+    AgentToolDefinition,
+    | 'source'
+    | 'group'
+    | 'category'
+    | 'annotations'
+    | 'executionMode'
+    | 'timeoutMs'
+    | 'abortable'
+    | 'pathAccess'
+  >;
+}
+
 const readToolDefinition = {
   name: 'read',
-  annotations: {
-    readOnly: true,
-    destructive: false,
-    openWorld: false,
-    idempotent: true,
-  },
-  executionMode: 'parallel',
+  ...createBuiltinReadOnlyToolBase('read'),
   modelTool: {
     name: 'read',
     description:
-      'Read a UTF-8 text file from the current workspace. Supports line pagination with offset and limit. Use this instead of shell cat or sed when examining files.',
+      'Read a UTF-8 text file. Relative paths resolve from the current project root. Supports line pagination with offset and limit. Use this instead of shell cat or sed when examining files.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         path: {
           type: 'string',
-          description: 'Workspace-relative file path to read.',
+          description:
+            'File path to read. Relative paths resolve from the current project root.',
         },
         offset: {
           type: 'number',
@@ -176,7 +202,7 @@ const readToolDefinition = {
   },
   execute: async (argumentsJson: string): Promise<AgentToolResult> => {
     const input = parseToolInput('read', argumentsJson, readInputSchema);
-    const result = await readWorkspaceFile(input);
+    const result = await readLocalFile(input);
 
     return {
       input: input,
@@ -192,17 +218,11 @@ const readToolDefinition = {
 
 const listToolDefinition = {
   name: 'ls',
-  annotations: {
-    readOnly: true,
-    destructive: false,
-    openWorld: false,
-    idempotent: true,
-  },
-  executionMode: 'parallel',
+  ...createBuiltinReadOnlyToolBase('read'),
   modelTool: {
     name: 'ls',
     description:
-      'List directory entries inside the current workspace. Use this for quick directory exploration before reading files.',
+      'List local directory entries. Relative paths resolve from the current project root. Use this for quick directory exploration before reading files.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -210,7 +230,7 @@ const listToolDefinition = {
         path: {
           type: 'string',
           description:
-            'Workspace-relative directory path to list. Defaults to the workspace root.',
+            'Directory path to list. Relative paths resolve from the current project root. Defaults to the current project root.',
         },
         limit: {
           type: 'number',
@@ -223,7 +243,7 @@ const listToolDefinition = {
   },
   execute: async (argumentsJson: string): Promise<AgentToolResult> => {
     const input = parseToolInput('ls', argumentsJson, listInputSchema);
-    const result = await listWorkspaceDirectory(input);
+    const result = await listLocalDirectory(input);
 
     return {
       input: input,
@@ -239,17 +259,11 @@ const listToolDefinition = {
 
 const findToolDefinition = {
   name: 'find',
-  annotations: {
-    readOnly: true,
-    destructive: false,
-    openWorld: false,
-    idempotent: true,
-  },
-  executionMode: 'parallel',
+  ...createBuiltinReadOnlyToolBase('search'),
   modelTool: {
     name: 'find',
     description:
-      'Find files by glob-style path pattern inside the current workspace. Use this for file-name discovery.',
+      'Find local files by glob-style path pattern. Relative paths resolve from the current project root. Use this for file-name discovery.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -262,7 +276,7 @@ const findToolDefinition = {
         path: {
           type: 'string',
           description:
-            'Workspace-relative directory path to search. Defaults to the workspace root.',
+            'Directory path to search. Relative paths resolve from the current project root. Defaults to the current project root.',
         },
         limit: {
           type: 'number',
@@ -275,7 +289,7 @@ const findToolDefinition = {
   },
   execute: async (argumentsJson: string): Promise<AgentToolResult> => {
     const input = parseToolInput('find', argumentsJson, findInputSchema);
-    const result = await findWorkspaceFiles(input);
+    const result = await findLocalFiles(input);
 
     return {
       input: input,
@@ -291,17 +305,11 @@ const findToolDefinition = {
 
 const grepToolDefinition = {
   name: 'grep',
-  annotations: {
-    readOnly: true,
-    destructive: false,
-    openWorld: false,
-    idempotent: true,
-  },
-  executionMode: 'parallel',
+  ...createBuiltinReadOnlyToolBase('search'),
   modelTool: {
     name: 'grep',
     description:
-      'Search file contents inside the current workspace using ripgrep. Use this before reading full files when looking for text or symbols.',
+      'Search local file contents using ripgrep. Relative paths resolve from the current project root. Use this before reading full files when looking for text or symbols.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -313,7 +321,7 @@ const grepToolDefinition = {
         path: {
           type: 'string',
           description:
-            'Workspace-relative file or directory path to search. Defaults to the workspace root.',
+            'File or directory path to search. Relative paths resolve from the current project root. Defaults to the current project root.',
         },
         glob: {
           type: 'string',
@@ -338,7 +346,7 @@ const grepToolDefinition = {
   },
   execute: async (argumentsJson: string): Promise<AgentToolResult> => {
     const input = parseToolInput('grep', argumentsJson, grepInputSchema);
-    const result = await grepWorkspace(input);
+    const result = await grepLocalFiles(input);
 
     return {
       input: input,
@@ -352,7 +360,7 @@ const grepToolDefinition = {
   },
 } satisfies AgentToolDefinition;
 
-export const workspaceReadToolDefinitions: AgentToolDefinition[] = [
+export const builtinReadOnlyToolDefinitions: AgentToolDefinition[] = [
   readToolDefinition,
   grepToolDefinition,
   findToolDefinition,
@@ -386,58 +394,43 @@ function parseToolInput<T>(
   return parsedInput.data;
 }
 
-async function resolveWorkspacePath(inputPath: string | undefined) {
-  const requestedPath = inputPath ?? '.';
-  const absolutePath = path.isAbsolute(requestedPath)
-    ? path.resolve(requestedPath)
-    : path.resolve(WORKSPACE_ROOT, requestedPath);
-
-  assertInsideWorkspace(absolutePath);
+async function resolveBuiltinToolPath(inputPath: string | undefined) {
+  const unresolvedPath = resolveAgentToolPath(
+    inputPath,
+    currentProjectPathAccessPolicy,
+  );
 
   let realAbsolutePath: string;
   try {
-    realAbsolutePath = await realpath(/* turbopackIgnore: true */ absolutePath);
+    realAbsolutePath = await realpath(
+      /* turbopackIgnore: true */ unresolvedPath.absolutePath,
+    );
   } catch {
     throw new AgentToolRespondToModelError(
       'PATH_NOT_FOUND',
-      `Path not found: ${displayWorkspacePath(absolutePath)}`,
+      `Path not found: ${unresolvedPath.displayPath}`,
     );
   }
 
-  assertInsideWorkspace(realAbsolutePath);
+  assertAgentPathAllowedByPolicy(
+    realAbsolutePath,
+    currentProjectPathAccessPolicy,
+  );
 
   return {
     absolutePath: realAbsolutePath,
-    relativePath: displayWorkspacePath(realAbsolutePath),
-  } satisfies WorkspacePath;
-}
-
-function assertInsideWorkspace(absolutePath: string): void {
-  const relativePath = path.relative(WORKSPACE_ROOT, absolutePath);
-
-  if (relativePath === '') {
-    return;
-  }
-
-  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    throw new AgentToolRespondToModelError(
-      'PATH_OUTSIDE_WORKSPACE',
-      `Path is outside the workspace root: ${path.normalize(absolutePath)}`,
-    );
-  }
-}
-
-function displayWorkspacePath(absolutePath: string): string {
-  const relativePath = path.relative(WORKSPACE_ROOT, absolutePath);
-
-  return relativePath === '' ? '.' : normalizePathSeparators(relativePath);
+    displayPath: displayAgentToolPath(
+      realAbsolutePath,
+      currentProjectPathAccessPolicy,
+    ),
+  } satisfies ResolvedAgentToolPath;
 }
 
 function normalizePathSeparators(value: string): string {
   return value.split(path.sep).join('/');
 }
 
-async function assertFile(pathInfo: WorkspacePath): Promise<void> {
+async function assertFile(pathInfo: ResolvedAgentToolPath): Promise<void> {
   const pathStat = await stat(
     /* turbopackIgnore: true */ pathInfo.absolutePath,
   );
@@ -445,12 +438,14 @@ async function assertFile(pathInfo: WorkspacePath): Promise<void> {
   if (!pathStat.isFile()) {
     throw new AgentToolRespondToModelError(
       'NOT_A_FILE',
-      `Path is not a file: ${pathInfo.relativePath}`,
+      `Path is not a file: ${pathInfo.displayPath}`,
     );
   }
 }
 
-async function assertDirectory(pathInfo: WorkspacePath): Promise<void> {
+async function assertDirectory(
+  pathInfo: ResolvedAgentToolPath,
+): Promise<void> {
   const pathStat = await stat(
     /* turbopackIgnore: true */ pathInfo.absolutePath,
   );
@@ -458,7 +453,7 @@ async function assertDirectory(pathInfo: WorkspacePath): Promise<void> {
   if (!pathStat.isDirectory()) {
     throw new AgentToolRespondToModelError(
       'NOT_A_DIRECTORY',
-      `Path is not a directory: ${pathInfo.relativePath}`,
+      `Path is not a directory: ${pathInfo.displayPath}`,
     );
   }
 }
@@ -494,8 +489,8 @@ function truncateToUtf8Bytes(text: string, maxBytes: number) {
   };
 }
 
-async function readWorkspaceFile(input: ReadInput): Promise<ReadFileResult> {
-  const pathInfo = await resolveWorkspacePath(input.path);
+async function readLocalFile(input: ReadInput): Promise<ReadFileResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path);
   await assertFile(pathInfo);
 
   const fileContent = await readFile(
@@ -531,7 +526,7 @@ async function readWorkspaceFile(input: ReadInput): Promise<ReadFileResult> {
   }
 
   return {
-    path: pathInfo.relativePath,
+    path: pathInfo.displayPath,
     startLine: startLine,
     endLine: endLine,
     totalLines: lines.length,
@@ -541,10 +536,8 @@ async function readWorkspaceFile(input: ReadInput): Promise<ReadFileResult> {
   };
 }
 
-async function listWorkspaceDirectory(
-  input: ListInput,
-): Promise<ListFilesResult> {
-  const pathInfo = await resolveWorkspacePath(input.path);
+async function listLocalDirectory(input: ListInput): Promise<ListFilesResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path);
   await assertDirectory(pathInfo);
 
   const limit = input.limit ?? DEFAULT_LIST_LIMIT;
@@ -559,7 +552,7 @@ async function listWorkspaceDirectory(
     return {
       name: entry.name,
       path: normalizePathSeparators(
-        path.join(pathInfo.relativePath, entry.name),
+        path.join(pathInfo.displayPath, entry.name),
       ),
       type: readDirectoryEntryType(entry),
     } satisfies ListEntry;
@@ -567,7 +560,7 @@ async function listWorkspaceDirectory(
   const truncated = entries.length > visibleEntries.length;
 
   return {
-    path: pathInfo.relativePath,
+    path: pathInfo.displayPath,
     entries: visibleEntries,
     truncated: truncated,
     notice: truncated
@@ -596,8 +589,8 @@ function readDirectoryEntryType(entry: {
   return 'other';
 }
 
-async function findWorkspaceFiles(input: FindInput): Promise<FindFilesResult> {
-  const pathInfo = await resolveWorkspacePath(input.path);
+async function findLocalFiles(input: FindInput): Promise<FindFilesResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path);
   await assertDirectory(pathInfo);
 
   const matcher = createGlobMatcher(input.pattern);
@@ -611,7 +604,7 @@ async function findWorkspaceFiles(input: FindInput): Promise<FindFilesResult> {
   );
 
   return {
-    path: pathInfo.relativePath,
+    path: pathInfo.displayPath,
     pattern: input.pattern,
     paths: paths,
     truncated: hasMore,
@@ -639,7 +632,10 @@ async function collectMatchingFiles(
     }
 
     const absoluteEntryPath = path.join(directoryPath, entry.name);
-    const relativeEntryPath = displayWorkspacePath(absoluteEntryPath);
+    const relativeEntryPath = displayAgentToolPath(
+      absoluteEntryPath,
+      currentProjectPathAccessPolicy,
+    );
 
     if (entry.isDirectory()) {
       const childHasMore = await collectMatchingFiles(
@@ -718,8 +714,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
 }
 
-async function grepWorkspace(input: GrepInput): Promise<GrepResult> {
-  const pathInfo = await resolveWorkspacePath(input.path);
+async function grepLocalFiles(input: GrepInput): Promise<GrepResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path);
   const limit = input.limit ?? DEFAULT_GREP_LIMIT;
   const matches = await runRipgrep(input, pathInfo, limit);
   const visibleMatches = matches.slice(0, limit);
@@ -762,7 +758,7 @@ async function grepWorkspace(input: GrepInput): Promise<GrepResult> {
   }
 
   return {
-    path: pathInfo.relativePath,
+    path: pathInfo.displayPath,
     pattern: input.pattern,
     matches: byteTruncated ? [] : normalizedMatches,
     truncated: matches.length > limit || lineTruncated || byteTruncated,
@@ -772,7 +768,7 @@ async function grepWorkspace(input: GrepInput): Promise<GrepResult> {
 
 async function runRipgrep(
   input: GrepInput,
-  pathInfo: WorkspacePath,
+  pathInfo: ResolvedAgentToolPath,
   limit: number,
 ): Promise<GrepMatch[]> {
   const args = [
@@ -836,7 +832,10 @@ async function runRipgrep(
     }
 
     matches.push({
-      path: displayWorkspacePath(absoluteMatchPath),
+      path: displayAgentToolPath(
+        absoluteMatchPath,
+        currentProjectPathAccessPolicy,
+      ),
       lineNumber: lineNumber,
       line: lineText.replace(/\r?\n$/, ''),
     });
@@ -852,7 +851,7 @@ async function runRipgrep(
 function collectProcessOutput(command: string, args: string[]) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: WORKSPACE_ROOT,
+      cwd: currentProjectPathAccessPolicy.root,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -1,13 +1,29 @@
 'use client';
 
-import { FormEvent, ReactNode, useReducer, useRef } from 'react';
+import {
+  FormEvent,
+  ReactNode,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { requestAgentRunStream } from '../lib/agent-api-client';
-import type { AgentApiResponse, AgentStep } from '../lib/agent-api-types';
+import type {
+  AgentApiResponse,
+  AgentDebugStreamEvent,
+  AgentStep,
+  AgentUsage,
+} from '../lib/agent-api-types';
+import type { AgentSessionRecord } from '../lib/agent-session-store';
 import { requestChatCompletion } from '../lib/chat-api-client';
 import type { ChatApiResponse } from '../lib/chat-api-types';
 
 type WorkbenchMode = 'chat' | 'agent';
+type AgentPageMode = 'agent' | 'debug' | 'session';
 
 type ChatFormState = {
   message: string;
@@ -50,24 +66,29 @@ type AgentViewState =
       status: 'streaming';
       answer: string;
       steps: AgentStep[];
+      debugEvents: AgentDebugStreamEvent[];
       model: string | null;
     }
   | {
       status: 'aborted';
       answer: string;
       steps: AgentStep[];
+      debugEvents: AgentDebugStreamEvent[];
     }
   | {
       status: 'success';
       response: Extract<AgentApiResponse, { ok: true }>;
+      debugEvents: AgentDebugStreamEvent[];
     }
   | {
       status: 'error';
       response: Extract<AgentApiResponse, { ok: false }>;
+      debugEvents: AgentDebugStreamEvent[];
     };
 
 type WorkbenchState = {
   mode: WorkbenchMode;
+  agentPage: AgentPageMode;
   chatForm: ChatFormState;
   chatView: ChatViewState;
   agentForm: AgentFormState;
@@ -78,6 +99,10 @@ type WorkbenchAction =
   | {
       type: 'modeChanged';
       mode: WorkbenchMode;
+    }
+  | {
+      type: 'agentPageChanged';
+      page: AgentPageMode;
     }
   | {
       type: 'chatMessageChanged';
@@ -130,6 +155,10 @@ type WorkbenchAction =
       delta: string;
     }
   | {
+      type: 'agentDebugEventReceived';
+      event: AgentDebugStreamEvent;
+    }
+  | {
       type: 'agentRunAborted';
     }
   | {
@@ -152,6 +181,11 @@ type TextAreaFieldProps = TextFieldProps & {
 type ModeSwitcherProps = {
   mode: WorkbenchMode;
   onModeChange: (mode: WorkbenchMode) => void;
+};
+
+type AgentPageSwitcherProps = {
+  page: AgentPageMode;
+  onPageChange: (page: AgentPageMode) => void;
 };
 
 type ChatFormProps = {
@@ -179,12 +213,15 @@ type AgentFormProps = {
 
 type ResultPanelProps = {
   mode: WorkbenchMode;
+  agentPage: AgentPageMode;
   chatView: ChatViewState;
   agentView: AgentViewState;
+  onAgentPageChange: (page: AgentPageMode) => void;
 };
 
 const initialState: WorkbenchState = {
   mode: 'agent',
+  agentPage: 'agent',
   chatForm: {
     message: '人生的意义是什么。',
     model: 'gpt-5.5',
@@ -195,9 +232,9 @@ const initialState: WorkbenchState = {
     response: null,
   },
   agentForm: {
-    task: '请统计这段文本的字符数、行数和词数：hello world\nsecond line',
-    goal: '请使用可用工具得到准确统计。',
-    context: '这是一次调试请求。',
+    task: '请梳理当前项目的 Tool Runtime Boundary v1：找出工具注册、路径策略、工具调度、provider schema 适配分别在哪些文件，并说明一次 read 工具调用从模型请求到写回 history 的链路。',
+    goal: '必须使用本地项目探索工具完成，至少查看相关源码文件后再回答。',
+    context: '这是一次用于验收 read、grep、find、ls 真实工具链路的请求。重点关注 lib/agent-tools.ts、lib/agent-builtins.ts、lib/agent-tool-contracts.ts、lib/agent-path-policy.ts、lib/agent-tool-runtime.ts、lib/agent-tool-scheduler.ts、lib/openai-tool-schema.ts、lib/agent.ts。',
     model: 'gpt-5.5',
     temperature: '0.7',
   },
@@ -216,6 +253,12 @@ function workbenchReducer(
       return {
         ...state,
         mode: action.mode,
+      };
+
+    case 'agentPageChanged':
+      return {
+        ...state,
+        agentPage: action.page,
       };
 
     case 'chatMessageChanged':
@@ -320,6 +363,7 @@ function workbenchReducer(
           status: 'streaming',
           answer: '',
           steps: [],
+          debugEvents: [],
           model: null,
         },
       };
@@ -350,6 +394,19 @@ function workbenchReducer(
         },
       };
 
+    case 'agentDebugEventReceived':
+      if (state.agentView.status !== 'streaming') {
+        return state;
+      }
+
+      return {
+        ...state,
+        agentView: {
+          ...state.agentView,
+          debugEvents: [...state.agentView.debugEvents, action.event],
+        },
+      };
+
     case 'agentRunAborted':
       if (state.agentView.status !== 'streaming') {
         return state;
@@ -361,20 +418,40 @@ function workbenchReducer(
           status: 'aborted',
           answer: state.agentView.answer,
           steps: state.agentView.steps,
+          debugEvents: state.agentView.debugEvents,
         },
       };
 
     case 'agentSubmitFinished':
+      if (state.agentView.status !== 'streaming') {
+        return {
+          ...state,
+          agentView: action.response.ok
+            ? {
+                status: 'success',
+                response: action.response,
+                debugEvents: [],
+              }
+            : {
+                status: 'error',
+                response: action.response,
+                debugEvents: [],
+              },
+        };
+      }
+
       return {
         ...state,
         agentView: action.response.ok
           ? {
               status: 'success',
               response: action.response,
+              debugEvents: state.agentView.debugEvents,
             }
           : {
               status: 'error',
               response: action.response,
+              debugEvents: state.agentView.debugEvents,
             },
       };
   }
@@ -417,6 +494,45 @@ function firstAgentValidationMessage(
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function formatOptionalNumber(value: number | null): string {
+  return value === null ? 'null' : String(value);
+}
+
+function usageLine(usage: AgentUsage | undefined): string {
+  if (usage === undefined) {
+    return 'usage pending';
+  }
+
+  return [
+    `input ${usage.totalTokenUsage.inputTokens}`,
+    `cached ${formatOptionalNumber(usage.totalTokenUsage.cachedInputTokens)}`,
+    `output ${usage.totalTokenUsage.outputTokens}`,
+    `reasoning ${usage.totalTokenUsage.reasoningOutputTokens}`,
+    `total ${usage.totalTokenUsage.totalTokens}`,
+  ].join(' · ');
+}
+
+function agentViewDebugEvents(view: AgentViewState): AgentDebugStreamEvent[] {
+  if (view.status === 'idle') {
+    return [];
+  }
+
+  return view.debugEvents;
+}
+
+function agentViewUsage(view: AgentViewState): AgentUsage | undefined {
+  return view.status === 'success' ? view.response.result.usage : undefined;
+}
+
+function agentRunId(view: AgentViewState): string | undefined {
+  const runStartedEvent = agentViewDebugEvents(view).find(
+    (event): event is Extract<AgentDebugStreamEvent, { type: 'runStarted' }> =>
+      event.type === 'runStarted',
+  );
+
+  return runStartedEvent?.runId;
 }
 
 function statusText(
@@ -510,6 +626,46 @@ function ModeSwitcher({ mode, onModeChange }: ModeSwitcherProps) {
         onClick={() => onModeChange('chat')}
       >
         Chat
+      </button>
+    </div>
+  );
+}
+
+function AgentPageSwitcher({ page, onPageChange }: AgentPageSwitcherProps) {
+  return (
+    <div className="subPageSwitcher" aria-label="Agent output page">
+      <button
+        type="button"
+        className={
+          page === 'agent'
+            ? 'subPageButton activeSubPageButton'
+            : 'subPageButton'
+        }
+        onClick={() => onPageChange('agent')}
+      >
+        Agent
+      </button>
+      <button
+        type="button"
+        className={
+          page === 'debug'
+            ? 'subPageButton activeSubPageButton'
+            : 'subPageButton'
+        }
+        onClick={() => onPageChange('debug')}
+      >
+        Debug
+      </button>
+      <button
+        type="button"
+        className={
+          page === 'session'
+            ? 'subPageButton activeSubPageButton'
+            : 'subPageButton'
+        }
+        onClick={() => onPageChange('session')}
+      >
+        Session
       </button>
     </div>
   );
@@ -642,6 +798,14 @@ function ErrorState({ children }: { children: ReactNode }) {
   return <div className="errorState">{children}</div>;
 }
 
+function AssistantMarkdown({ text }: { text: string }) {
+  return (
+    <div className="assistantMarkdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
 function AgentTrace({ steps }: { steps: AgentStep[] }) {
   return (
     <div className="traceList">
@@ -663,91 +827,829 @@ function AgentTrace({ steps }: { steps: AgentStep[] }) {
   );
 }
 
-function AgentResultView({ view }: { view: AgentViewState }) {
+type ToolDebugCard = {
+  toolCallId: string;
+  toolName: string;
+  argumentsJson: string;
+  status: 'requested' | 'running' | 'finished';
+  input: unknown;
+  result: unknown;
+  modelOutput: string | undefined;
+  isError: boolean | undefined;
+};
+
+type ModelCompletedDebugEvent = Extract<
+  AgentDebugStreamEvent,
+  { type: 'modelCompleted' }
+>;
+
+type HistoryCommittedDebugEvent = Extract<
+  AgentDebugStreamEvent,
+  { type: 'historyCommitted' }
+>;
+
+type AgentSessionFetchState =
+  | {
+      status: 'idle';
+      records: null;
+      error: null;
+    }
+  | {
+      status: 'loading';
+      records: AgentSessionRecord[] | null;
+      error: null;
+    }
+  | {
+      status: 'success';
+      records: AgentSessionRecord[];
+      error: null;
+    }
+  | {
+      status: 'error';
+      records: AgentSessionRecord[] | null;
+      error: string;
+    };
+
+function createToolDebugCards(
+  events: AgentDebugStreamEvent[],
+): ToolDebugCard[] {
+  const cards = new Map<string, ToolDebugCard>();
+
+  for (const event of events) {
+    if (event.type === 'toolRequested') {
+      for (const request of event.toolRequests) {
+        cards.set(request.toolCallId, {
+          toolCallId: request.toolCallId,
+          toolName: request.toolName,
+          argumentsJson: request.argumentsJson,
+          status: 'requested',
+          input: undefined,
+          result: undefined,
+          modelOutput: undefined,
+          isError: undefined,
+        });
+      }
+      continue;
+    }
+
+    if (event.type === 'toolStarted') {
+      const existing = cards.get(event.toolCallId);
+      cards.set(event.toolCallId, {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        argumentsJson: event.argumentsJson,
+        status: 'running',
+        input: existing?.input,
+        result: existing?.result,
+        modelOutput: existing?.modelOutput,
+        isError: existing?.isError,
+      });
+      continue;
+    }
+
+    if (event.type === 'toolFinished') {
+      const existing = cards.get(event.toolCallId);
+      cards.set(event.toolCallId, {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        argumentsJson: existing?.argumentsJson ?? '',
+        status: 'finished',
+        input: event.input,
+        result: event.result,
+        modelOutput: event.modelOutput,
+        isError: event.isError,
+      });
+    }
+  }
+
+  return [...cards.values()];
+}
+
+function eventLabel(event: AgentDebugStreamEvent): string {
+  switch (event.type) {
+    case 'runStarted':
+      return `run ${event.runId}`;
+    case 'modelStarted':
+      return `model ${event.stage}`;
+    case 'modelRequested':
+      return `round ${event.round} ${event.model}`;
+    case 'modelCompleted':
+      return `round ${event.round} output: ${event.toolCalls.length} tool call(s)`;
+    case 'historyCommitted':
+      return `${event.items.length} response item(s) committed`;
+    case 'toolRequested':
+      return `${event.toolRequests.length} tool request(s)`;
+    case 'toolStarted':
+      return `${event.toolName} started`;
+    case 'toolFinished':
+      return `${event.toolName} ${event.isError ? 'errored' : 'finished'}`;
+    case 'toolPermissionDecided':
+      return 'permission decided';
+    case 'approvalRequested':
+      return 'approval requested';
+    case 'runCancelled':
+      return event.reason;
+  }
+}
+
+function modelRequestEvents(
+  events: AgentDebugStreamEvent[],
+): Array<Extract<AgentDebugStreamEvent, { type: 'modelRequested' }>> {
+  return events.filter(
+    (
+      event,
+    ): event is Extract<AgentDebugStreamEvent, { type: 'modelRequested' }> =>
+      event.type === 'modelRequested',
+  );
+}
+
+function modelCompletedEvents(
+  events: AgentDebugStreamEvent[],
+): ModelCompletedDebugEvent[] {
+  return events.filter(
+    (event): event is ModelCompletedDebugEvent =>
+      event.type === 'modelCompleted',
+  );
+}
+
+function historyCommittedEvents(
+  events: AgentDebugStreamEvent[],
+): HistoryCommittedDebugEvent[] {
+  return events.filter(
+    (event): event is HistoryCommittedDebugEvent =>
+      event.type === 'historyCommitted',
+  );
+}
+
+function modelOutputForRound(
+  events: AgentDebugStreamEvent[],
+  round: number,
+): ModelCompletedDebugEvent | undefined {
+  return modelCompletedEvents(events).find((event) => event.round === round);
+}
+
+function assistantMessageText(event: ModelCompletedDebugEvent): string {
+  const committedText = event.assistantMessages
+    .map((message) => message.text)
+    .filter((text) => text.trim() !== '')
+    .join('\n\n');
+
+  return event.streamedAssistantText.trim() !== ''
+    ? event.streamedAssistantText
+    : committedText;
+}
+
+function toolCardsForModelOutput(
+  event: ModelCompletedDebugEvent,
+  allCards: ToolDebugCard[],
+): ToolDebugCard[] {
+  return event.toolCalls.map((toolCall) => {
+    const existing = allCards.find((card) => card.toolCallId === toolCall.id);
+
+    return (
+      existing ?? {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        argumentsJson: toolCall.argumentsJson,
+        status: 'requested',
+        input: undefined,
+        result: undefined,
+        modelOutput: undefined,
+        isError: undefined,
+      }
+    );
+  });
+}
+
+function agentViewSteps(view: AgentViewState): AgentStep[] {
+  if (view.status === 'idle' || view.status === 'error') {
+    return [];
+  }
+
+  if (view.status === 'success') {
+    return view.response.result.steps;
+  }
+
+  return view.steps;
+}
+
+function agentLiveAnswer(view: AgentViewState): string {
+  if (view.status === 'streaming' || view.status === 'aborted') {
+    return view.answer;
+  }
+
+  if (view.status === 'success') {
+    return view.response.result.answer;
+  }
+
+  return '';
+}
+
+function agentDisplayStatus(view: AgentViewState): string {
+  switch (view.status) {
+    case 'streaming':
+      return 'running';
+    case 'aborted':
+      return 'stopped';
+    case 'success':
+      return 'done';
+    case 'error':
+      return 'error';
+    case 'idle':
+      return 'idle';
+  }
+}
+
+function agentLiveTail(
+  liveAnswer: string,
+  completedAssistantText: string,
+): string {
+  if (
+    completedAssistantText !== '' &&
+    liveAnswer.startsWith(completedAssistantText)
+  ) {
+    return liveAnswer.slice(completedAssistantText.length);
+  }
+
+  return liveAnswer;
+}
+
+function ModelRequestDebugView({
+  event,
+  outputEvent,
+}: {
+  event: Extract<AgentDebugStreamEvent, { type: 'modelRequested' }>;
+  outputEvent: ModelCompletedDebugEvent | undefined;
+}) {
+  return (
+    <article className="modelDebugCard">
+      <div className="toolDebugHeader">
+        <div>
+          <h3>Round {event.round}</h3>
+          <span>
+            {event.model} · {event.wireApi}
+          </span>
+        </div>
+        <strong className="toolStatus">model</strong>
+      </div>
+      <div className="debugSummaryGrid compactDebugSummary">
+        <div>
+          <span className="debugLabel">Temperature</span>
+          <strong>
+            {event.request.temperature === undefined
+              ? 'default'
+              : event.request.temperature}
+          </strong>
+        </div>
+        <div>
+          <span className="debugLabel">Tool choice</span>
+          <strong>{event.request.toolChoice}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Messages</span>
+          <strong>{event.request.messages.length}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Tools</span>
+          <strong>{event.request.tools.length}</strong>
+        </div>
+      </div>
+      <details className="debugDetails" open>
+        <summary>Model API input</summary>
+        <pre className="jsonBlock fullJsonBlock">
+          {formatJson(event.request)}
+        </pre>
+      </details>
+      <details className="debugDetails" open>
+        <summary>Model output</summary>
+        <pre className="jsonBlock fullJsonBlock">
+          {formatJson(
+            outputEvent ?? {
+              status: 'waiting_for_model_output',
+            },
+          )}
+        </pre>
+      </details>
+    </article>
+  );
+}
+
+function parseArgumentsForDisplay(argumentsJson: string): unknown {
+  if (argumentsJson.trim() === '') {
+    return {};
+  }
+
+  try {
+    return JSON.parse(argumentsJson);
+  } catch {
+    return argumentsJson;
+  }
+}
+
+function ToolDebugCardView({ card }: { card: ToolDebugCard }) {
+  return (
+    <article className="toolDebugCard">
+      <div className="toolDebugHeader">
+        <div>
+          <h3>{card.toolName}</h3>
+          <span>{card.toolCallId}</span>
+        </div>
+        <strong
+          className={
+            card.isError === true ? 'toolStatus errorToolStatus' : 'toolStatus'
+          }
+        >
+          {card.status}
+        </strong>
+      </div>
+      <div className="debugColumns">
+        <div>
+          <span className="debugLabel">Arguments</span>
+          <pre className="jsonBlock fullJsonBlock">
+            {formatJson(parseArgumentsForDisplay(card.argumentsJson))}
+          </pre>
+        </div>
+        <div>
+          <span className="debugLabel">Model-visible output</span>
+          <pre className="debugTextBlock fullDebugTextBlock">
+            {card.modelOutput ?? 'Waiting for tool output...'}
+          </pre>
+        </div>
+      </div>
+      <details className="debugDetails">
+        <summary>Internal details</summary>
+        <pre className="jsonBlock fullJsonBlock">
+          {formatJson({
+            input: card.input,
+            result: card.result,
+          })}
+        </pre>
+      </details>
+    </article>
+  );
+}
+
+function responseItemLabel(
+  item: HistoryCommittedDebugEvent['items'][number],
+): string {
+  switch (item.type) {
+    case 'message':
+      return item.role === 'assistant'
+        ? `assistant ${item.runtimeRole ?? 'unknown_role'}`
+        : item.role;
+    case 'function_call':
+      return `tool request ${item.name}`;
+    case 'function_call_output':
+      return `tool result ${item.toolName}`;
+  }
+}
+
+function HistoryCommitDebugView({
+  event,
+  index,
+}: {
+  event: HistoryCommittedDebugEvent;
+  index: number;
+}) {
+  return (
+    <article className="historyCommitCard">
+      <div className="toolDebugHeader">
+        <div>
+          <h3>Commit {index + 1}</h3>
+          <span>{event.items.length} response item(s)</span>
+        </div>
+        <strong className="toolStatus">history</strong>
+      </div>
+      <div className="historyItemList">
+        {event.items.map((item, itemIndex) => (
+          <details className="historyItemRow" key={`${item.type}-${itemIndex}`}>
+            <summary>
+              <code>{item.type}</code>
+              <span>{responseItemLabel(item)}</span>
+            </summary>
+            <pre className="jsonBlock fullJsonBlock">{formatJson(item)}</pre>
+          </details>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function AgentDebugConsole({
+  events,
+  usage,
+}: {
+  events: AgentDebugStreamEvent[];
+  usage: AgentUsage | undefined;
+}) {
+  const toolCards = createToolDebugCards(events);
+  const modelRequests = modelRequestEvents(events);
+  const modelOutputs = modelCompletedEvents(events);
+  const historyCommits = historyCommittedEvents(events);
+
+  return (
+    <section className="debugPanel">
+      <div className="sectionHeader">
+        <span>Debug console</span>
+        <code>{events.length} runtime events</code>
+      </div>
+      <div className="debugSummaryGrid">
+        <div>
+          <span className="debugLabel">Usage</span>
+          <strong>{usageLine(usage)}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Model rounds</span>
+          <strong>
+            {modelOutputs.length}/{modelRequests.length} completed
+          </strong>
+        </div>
+        <div>
+          <span className="debugLabel">Tools</span>
+          <strong>{toolCards.length} calls</strong>
+        </div>
+        <div>
+          <span className="debugLabel">History commits</span>
+          <strong>{historyCommits.length}</strong>
+        </div>
+      </div>
+      {modelRequests.length === 0 ? (
+        <EmptyState>No model request yet.</EmptyState>
+      ) : (
+        <div className="modelDebugList">
+          {modelRequests.map((event) => (
+            <ModelRequestDebugView
+              event={event}
+              outputEvent={modelOutputForRound(events, event.round)}
+              key={`${event.round}-${event.model}`}
+            />
+          ))}
+        </div>
+      )}
+      {toolCards.length === 0 ? (
+        <EmptyState>No tool calls yet.</EmptyState>
+      ) : (
+        <div className="toolDebugList">
+          {toolCards.map((card) => (
+            <ToolDebugCardView card={card} key={card.toolCallId} />
+          ))}
+        </div>
+      )}
+      {historyCommits.length === 0 ? (
+        <EmptyState>No history commits yet.</EmptyState>
+      ) : (
+        <div className="historyDebugList">
+          {historyCommits.map((event, index) => (
+            <HistoryCommitDebugView
+              event={event}
+              index={index}
+              key={`history-${index}`}
+            />
+          ))}
+        </div>
+      )}
+      <details className="debugDetails">
+        <summary>Runtime event stream</summary>
+        <div className="eventList">
+          {events.map((event, index) => (
+            <details className="eventRow" key={`${event.type}-${index}`}>
+              <summary>
+                <code>{event.type}</code>
+                <span>{eventLabel(event)}</span>
+              </summary>
+              <pre className="jsonBlock fullJsonBlock">{formatJson(event)}</pre>
+            </details>
+          ))}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+async function fetchAgentSessionRecords(
+  runId: string,
+): Promise<AgentSessionRecord[]> {
+  const response = await fetch(
+    `/api/agent/sessions/${encodeURIComponent(runId)}`,
+  );
+  const data = (await response.json()) as unknown;
+
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    'ok' in data &&
+    data.ok === true &&
+    'records' in data &&
+    Array.isArray(data.records)
+  ) {
+    return data.records as AgentSessionRecord[];
+  }
+
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    'error' in data &&
+    typeof data.error === 'string'
+  ) {
+    throw new Error(data.error);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Session request failed with status ${response.status}.`);
+  }
+
+  throw new Error('Session API returned an unexpected response shape.');
+}
+
+function recordsToJsonl(records: AgentSessionRecord[]): string {
+  return records.map((record) => JSON.stringify(record)).join('\n');
+}
+
+function AgentSessionView({ view }: { view: AgentViewState }) {
+  const runId = agentRunId(view);
+  const refreshKey = agentViewDebugEvents(view).length;
+  const [fetchState, setFetchState] = useState<AgentSessionFetchState>({
+    status: 'idle',
+    records: null,
+    error: null,
+  });
+
+  useEffect(() => {
+    if (runId === undefined) {
+      setFetchState({
+        status: 'idle',
+        records: null,
+        error: null,
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setFetchState((current) => ({
+      status: 'loading',
+      records: current.records,
+      error: null,
+    }));
+
+    fetchAgentSessionRecords(runId)
+      .then((records) => {
+        if (cancelled) {
+          return;
+        }
+
+        setFetchState({
+          status: 'success',
+          records: records,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setFetchState((current) => ({
+          status: 'error',
+          records: current.records,
+          error: error instanceof Error ? error.message : 'Session load failed',
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, refreshKey]);
+
+  if (runId === undefined) {
+    return (
+      <EmptyState>Session JSONL will appear after a run starts.</EmptyState>
+    );
+  }
+
+  const records = fetchState.records ?? [];
+
+  return (
+    <section className="sessionPanel">
+      <div className="sectionHeader">
+        <span>Session JSONL</span>
+        <code>{runId}</code>
+      </div>
+      <div className="sessionSummary">
+        <div>
+          <span className="debugLabel">Records</span>
+          <strong>{records.length}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Load state</span>
+          <strong>{fetchState.status}</strong>
+        </div>
+      </div>
+      {fetchState.status === 'error' ? (
+        <ErrorState>{fetchState.error}</ErrorState>
+      ) : null}
+      {records.length === 0 ? (
+        <EmptyState>Waiting for session records...</EmptyState>
+      ) : (
+        <pre className="jsonlBlock">{recordsToJsonl(records)}</pre>
+      )}
+    </section>
+  );
+}
+
+function toolBatchStatus(cards: ToolDebugCard[]): string {
+  if (cards.some((card) => card.isError === true)) {
+    return 'needs attention';
+  }
+
+  if (cards.every((card) => card.status === 'finished')) {
+    return 'done';
+  }
+
+  if (cards.some((card) => card.status === 'running')) {
+    return 'running';
+  }
+
+  return 'queued';
+}
+
+function ToolBatchView({ cards }: { cards: ToolDebugCard[] }) {
+  const toolNames = cards.map((card) => card.toolName).join(', ');
+  const batchStatus = toolBatchStatus(cards);
+
+  return (
+    <details className="workBatch">
+      <summary>
+        <span>
+          {batchStatus === 'done' ? 'Used' : 'Using'} {cards.length} tool
+          {cards.length === 1 ? '' : 's'}
+        </span>
+        <strong>{toolNames}</strong>
+      </summary>
+      <div className="toolBatchList">
+        {cards.map((card) => (
+          <article className="compactToolCard" key={card.toolCallId}>
+            <div className="toolRunHeader">
+              <div>
+                <h3>{card.toolName}</h3>
+                <span>
+                  {card.isError === true ? 'needs attention' : batchStatus}
+                </span>
+              </div>
+              <strong
+                className={
+                  card.isError === true
+                    ? 'toolStatus errorToolStatus'
+                    : 'toolStatus'
+                }
+              >
+                {card.status}
+              </strong>
+            </div>
+            <div className="toolRunGrid">
+              <details className="toolPayloadDisclosure">
+                <summary>Input</summary>
+                <pre>
+                  {formatJson(parseArgumentsForDisplay(card.argumentsJson))}
+                </pre>
+              </details>
+              <details className="toolPayloadDisclosure">
+                <summary>Result</summary>
+                <pre>{card.modelOutput ?? 'Waiting for tool result...'}</pre>
+              </details>
+            </div>
+          </article>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function AgentTranscript({
+  view,
+  events,
+}: {
+  view: AgentViewState;
+  events: AgentDebugStreamEvent[];
+}) {
+  const modelOutputs = modelCompletedEvents(events);
+  const toolCards = createToolDebugCards(events);
+  const liveAnswer = agentLiveAnswer(view);
+  const completedAssistantText = modelOutputs
+    .map((event) => assistantMessageText(event))
+    .join('');
+  const liveTail = agentLiveTail(liveAnswer, completedAssistantText);
+  const shouldShowLiveAnswer =
+    view.status === 'streaming' && liveTail.trim() !== '';
+
+  if (modelOutputs.length === 0 && !shouldShowLiveAnswer) {
+    return (
+      <section className="answerPanel">
+        <div className="sectionHeader">
+          <span>Agent</span>
+          <code>{agentDisplayStatus(view)}</code>
+        </div>
+        <EmptyState>Waiting for model output...</EmptyState>
+      </section>
+    );
+  }
+
+  return (
+    <section className="answerPanel">
+      <div className="sectionHeader">
+        <span>Agent</span>
+        <code>{agentDisplayStatus(view)}</code>
+      </div>
+      <div className="agentTranscript">
+        {modelOutputs.map((event) => {
+          const text = assistantMessageText(event);
+          const cards = toolCardsForModelOutput(event, toolCards);
+
+          return (
+            <div className="transcriptRound" key={event.round}>
+              {text.trim() === '' ? null : (
+                <article className="assistantText">
+                  <AssistantMarkdown text={text} />
+                </article>
+              )}
+              {cards.length === 0 ? null : <ToolBatchView cards={cards} />}
+            </div>
+          );
+        })}
+        {shouldShowLiveAnswer ? (
+          <article className="assistantText liveAssistantText">
+            <AssistantMarkdown text={liveTail} />
+          </article>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function AgentRunView({ view }: { view: AgentViewState }) {
   if (view.status === 'idle') {
     return <EmptyState>Agent result will appear here.</EmptyState>;
   }
 
   if (view.status === 'error') {
     return (
-      <ErrorState>{firstAgentValidationMessage(view.response)}</ErrorState>
-    );
-  }
-
-  if (view.status === 'streaming') {
-    return (
       <div className="resultStack">
-        <section className="answerPanel">
-          <div className="sectionHeader">
-            <span>Answer</span>
-            <code>{view.model ?? 'streaming'}</code>
-          </div>
-          <pre className="answerText">
-            {view.answer === '' ? 'Waiting for answer...' : view.answer}
-          </pre>
-        </section>
-        <section className="tracePanel">
-          <div className="sectionHeader">
-            <span>Trace</span>
-            <code>{view.steps.length} steps</code>
-          </div>
-          {view.steps.length === 0 ? (
-            <EmptyState>Waiting for first step...</EmptyState>
-          ) : (
-            <AgentTrace steps={view.steps} />
-          )}
-        </section>
+        <ErrorState>{firstAgentValidationMessage(view.response)}</ErrorState>
       </div>
     );
   }
 
-  if (view.status === 'aborted') {
-    return (
-      <div className="resultStack">
-        <section className="answerPanel">
-          <div className="sectionHeader">
-            <span>Answer</span>
-            <code>aborted</code>
-          </div>
-          <pre className="answerText">
-            {view.answer === ''
-              ? 'Run stopped before answer output.'
-              : view.answer}
-          </pre>
-        </section>
-        <section className="tracePanel">
-          <div className="sectionHeader">
-            <span>Trace</span>
-            <code>{view.steps.length} steps</code>
-          </div>
-          {view.steps.length === 0 ? (
-            <EmptyState>Run stopped before first step.</EmptyState>
-          ) : (
-            <AgentTrace steps={view.steps} />
-          )}
-        </section>
-      </div>
-    );
-  }
+  const events = agentViewDebugEvents(view);
+  const steps = agentViewSteps(view);
 
   return (
     <div className="resultStack">
-      <section className="answerPanel">
-        <div className="sectionHeader">
-          <span>Answer</span>
-          <code>{view.response.result.model}</code>
-        </div>
-        <pre className="answerText">{view.response.result.answer}</pre>
-      </section>
-      <section className="tracePanel">
-        <div className="sectionHeader">
-          <span>Trace</span>
-          <code>{view.response.result.steps.length} steps</code>
-        </div>
-        <AgentTrace steps={view.response.result.steps} />
-      </section>
+      <AgentTranscript view={view} events={events} />
+      <details className="stepShelf">
+        <summary>
+          <span>Run details</span>
+          <strong>{steps.length}</strong>
+        </summary>
+        {steps.length === 0 ? (
+          <EmptyState>No run details yet.</EmptyState>
+        ) : (
+          <AgentTrace steps={steps} />
+        )}
+      </details>
     </div>
   );
+}
+
+function AgentResultView({
+  view,
+  page,
+}: {
+  view: AgentViewState;
+  page: AgentPageMode;
+}) {
+  if (page === 'debug') {
+    if (view.status === 'idle') {
+      return <EmptyState>Debug events will appear here.</EmptyState>;
+    }
+
+    return (
+      <div className="resultStack">
+        <AgentDebugConsole
+          events={agentViewDebugEvents(view)}
+          usage={agentViewUsage(view)}
+        />
+      </div>
+    );
+  }
+
+  if (page === 'session') {
+    return (
+      <div className="resultStack">
+        <AgentSessionView view={view} />
+      </div>
+    );
+  }
+
+  return <AgentRunView view={view} />;
 }
 
 function ChatResultView({ view }: { view: ChatViewState }) {
@@ -774,7 +1676,13 @@ function ChatResultView({ view }: { view: ChatViewState }) {
   );
 }
 
-function ResultPanel({ mode, chatView, agentView }: ResultPanelProps) {
+function ResultPanel({
+  mode,
+  agentPage,
+  chatView,
+  agentView,
+  onAgentPageChange,
+}: ResultPanelProps) {
   return (
     <section className="workspacePanel resultPanel" aria-live="polite">
       <div className="panelHeader">
@@ -782,9 +1690,15 @@ function ResultPanel({ mode, chatView, agentView }: ResultPanelProps) {
           <span className="panelKicker">Output</span>
           <h2>{mode === 'agent' ? 'Agent run' : 'Chat completion'}</h2>
         </div>
+        {mode === 'agent' ? (
+          <AgentPageSwitcher
+            page={agentPage}
+            onPageChange={onAgentPageChange}
+          />
+        ) : null}
       </div>
       {mode === 'agent' ? (
-        <AgentResultView view={agentView} />
+        <AgentResultView view={agentView} page={agentPage} />
       ) : (
         <ChatResultView view={chatView} />
       )}
@@ -859,6 +1773,16 @@ export function ChatPlayground() {
             dispatch({
               type: 'agentAssistantDeltaReceived',
               delta: event.delta,
+            });
+          },
+          onDebug: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
+            dispatch({
+              type: 'agentDebugEventReceived',
+              event: event.event,
             });
           },
           onDone: (event) => {
@@ -1021,8 +1945,15 @@ export function ChatPlayground() {
 
         <ResultPanel
           mode={state.mode}
+          agentPage={state.agentPage}
           chatView={state.chatView}
           agentView={state.agentView}
+          onAgentPageChange={(page) =>
+            dispatch({
+              type: 'agentPageChanged',
+              page: page,
+            })
+          }
         />
       </section>
     </main>

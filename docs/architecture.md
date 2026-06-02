@@ -3,6 +3,10 @@
 This document is the project map. Keep it current when routes, services,
 shared API contracts, environment config, or agent flow boundaries change.
 
+For a chaptered learning path that explains why these layers appeared in this
+order, start at `tutorial/README.md`. The English path is
+`tutorial/en/README.md`, and the Chinese path is `tutorial/zh/README.md`.
+
 ## Current Goal
 
 The project is a small Next.js + TypeScript learning backend. It starts from a
@@ -47,7 +51,7 @@ flowchart TD
   ModelDialect --> ResponsesDialect[lib/openai-responses-dialect.ts]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
-  AgentTools --> WorkspaceTools[lib/agent-workspace-tools.ts]
+  AgentTools --> BuiltinTools[lib/agent-builtins.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   ModelGateway --> OpenAIClient
@@ -89,9 +93,11 @@ lib/agent-run-context.ts            Agent run lifecycle context and cancellation
 lib/agent-events.ts                 Agent runtime event and run state types
 lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers for agent runs
+lib/agent-tool-contracts.ts         Provider-neutral tool definition and grouping contract
+lib/agent-path-policy.ts            Tool path-access policy helpers
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
-lib/agent-tools.ts                  Local agent tool registry and concrete handlers
-lib/agent-workspace-tools.ts        Read-only workspace file exploration tools
+lib/agent-tools.ts                  Agent tool groups and registry
+lib/agent-builtins.ts               Built-in read-only local file tools
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-tool-schema.ts           OpenAI strict tool-schema adapter
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
@@ -160,6 +166,9 @@ boundary, then returns Server-Sent Events:
 - `step` events append inspectable agent steps
 - `assistantDelta` events stream assistant text; the runtime cannot know whether
   a streamed message is final until the sampling round ends
+- `debug` events expose runtime internals for the local Debug Console: model
+  requests, model outputs, tool requests, permission decisions, tool starts, and
+  tool finishes
 - `done` events carry the final `AgentResult`
 - `error` events carry stream-time failures
 
@@ -209,25 +218,55 @@ sandboxing.
 `AgentEvent` is the runtime truth for what happened during a run. `AgentStep`
 is still the current frontend-friendly display projection. `lib/agent.ts`
 emits internal events such as `run_started`, `model_started`,
-`assistant_delta`, `tool_requested`, `tool_started`, `tool_finished`,
-`step_created`, and `run_succeeded`. The streaming route sends frontend SSE
-events by projecting these runtime events through
+`model_requested`, `assistant_delta`, `tool_requested`, `tool_started`,
+`tool_finished`, `model_completed`, `step_created`, and `run_succeeded`. The
+streaming route sends frontend SSE events by projecting these runtime events
+through
 `lib/agent-stream-projection.ts`.
+
+History commit inspection is intentionally not an `AgentEvent`: the JSONL
+session already writes authoritative `response_item` records for resume/replay,
+while `debug.historyCommitted` is a stream-only Debug Console event emitted from
+the response-item append boundary.
 
 `lib/agent-stream-projection.ts` owns the projection from runtime events to the
 browser stream contract:
 
 - `step_created` becomes `step`
 - `assistant_delta` becomes `assistantDelta`
+- `model_requested` becomes `debug.modelRequested`
+- `model_completed` becomes `debug.modelCompleted`
+- `tool_requested`, `tool_started`, `tool_permission_decided`, and
+  `tool_finished` become `debug` events
+- `tool_finished.modelOutput` is the exact text written into
+  `function_call_output.output`
 - `run_succeeded` becomes `done`
 - `run_failed` becomes `error`
 
-Tool lifecycle events currently stay server-side only. They are logged as
-runtime events but are not exposed to the existing React UI.
+`components/chat-playground.tsx` keeps these debug events for the current run
+and projects them into three frontend pages:
 
-Permission events currently stay server-side only. `tool_permission_decided`
-records each runtime permission decision. `approval_requested` records that a
-tool call needs user approval, but interactive approval resume is not
+- Agent page: a transcript view that chains committed assistant text with the
+  tool batches requested by the same model output, using user-facing labels
+  instead of runtime terms such as "round". Assistant text is rendered as
+  Markdown because model output commonly contains lists, code blocks, and
+  tables. The legacy `AgentStep` display is still available, but collapsed
+  because it is now a display summary rather than the primary runtime story.
+- Debug page: a full inspection console for every sampling round's model input
+  and output, history commits, assistant text, committed assistant messages,
+  tool calls, usage, tool arguments, model-visible tool output, and internal
+  structured tool details. The history commit layer is where
+  `runtimeRole: "working_message" | "final_response"` appears.
+- Session page: a read-only JSONL viewer for the current run's actual persisted
+  session records, loaded through `/api/agent/sessions/[id]`. This page is for
+  inspecting the resume/replay artifact itself; it is intentionally separate
+  from the Debug page's runtime event projection.
+
+The browser remains an observer; it does not execute tools or call the model.
+
+`tool_permission_decided` records each runtime permission decision.
+`approval_requested` records that a tool call needs user approval, but
+interactive approval resume is not
 implemented yet.
 
 `lib/agent-model-stages.ts` owns the shared model-call stage names used by
@@ -461,29 +500,56 @@ Runtime timeout and in-flight abort become `respond_to_model` outputs with
 stable error codes. This mirrors the useful split from Codex and pi-mono:
 structured metadata remains internal, while the model sees low-friction text.
 
-`lib/agent-tools.ts` owns the local tool registry.
-
-Each tool definition groups the tool name, provider-neutral model tool metadata,
-tool annotations, argument parsing, and the concrete handler. Dialects compile
-the provider-neutral tool metadata into their own wire format. The registry
-currently includes `inspect_text` for direct text statistics plus the read-only
-workspace exploration tools from `lib/agent-workspace-tools.ts`.
-
-`lib/agent-workspace-tools.ts` owns the concrete workspace read tools:
+`lib/agent-tool-contracts.ts` owns the provider-neutral internal tool contract.
+The contract separates runtime metadata from provider-visible schema:
 
 ```text
-ls      list workspace directory entries
+source        builtin | dynamic | mcp | hosted
+group         utility_builtins | read_only_builtins | editing_builtins | shell_builtins
+category      utility | read | search | write | shell
+annotations   readOnly / destructive / openWorld / idempotent facts
+execution     executionMode, timeoutMs, abortable
+pathAccess    none | current_project | allowed_roots | danger_full_access
+modelTool     name, description, inputSchema, schemaStrict
+execute       concrete handler
+```
+
+`lib/agent-tools.ts` owns the active tool groups and registry. Current active
+groups are:
+
+```text
+utility_builtins    empty skeleton
+read_only_builtins  read, grep, find, ls
+editing_builtins    empty skeleton
+shell_builtins      empty skeleton
+```
+
+Dialects only receive `modelTool`. Internal metadata such as `source`, `group`,
+`pathAccess`, `annotations`, and `executionMode` stays inside the agent runtime
+and is available to permission decisions, scheduler decisions, debug events,
+and future telemetry.
+
+`lib/agent-builtins.ts` owns the concrete built-in read-only tools:
+
+```text
+ls      list local directory entries
 find    find files by glob-style path pattern
 grep    search file contents with ripgrep
 read    read UTF-8 text files with line pagination
 ```
 
-These tools are read-only, non-destructive, closed-world, idempotent, and marked
-parallel-capable. Each path is resolved against the current workspace root and
-then checked with `realpath`, so `../` paths and symlink escapes fail as ordinary
-tool errors. Large outputs return bounded structured data plus actionable
-notices, such as using a later `offset` for `read` or narrowing a `grep`
-pattern.
+These tools are read-only, non-destructive, closed-world, idempotent, marked
+parallel-capable, and attached to `pathAccess=current_project`.
+
+`lib/agent-path-policy.ts` owns path policy resolution. The current built-ins
+use `current_project`, so each path is resolved against the current project
+root and then checked with `realpath`; `../` paths and symlink escapes fail as
+ordinary tool errors. The module also defines `allowed_roots` and
+`danger_full_access` for future editing/shell tool layers, but those modes are
+not active for the current read-only built-ins.
+
+Large outputs return bounded structured data plus actionable notices, such as
+using a later `offset` for `read` or narrowing a `grep` pattern.
 
 `lib/agent-log.ts` owns structured server logs for `/api/agent`.
 
@@ -526,9 +592,11 @@ lib/agent-run-context.ts            Per-run lifecycle context and cancellation
 lib/agent-events.ts                 Internal runtime events and derived run state
 lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers
+lib/agent-tool-contracts.ts         Provider-neutral tool contract, source, groups, execution metadata
+lib/agent-path-policy.ts            current-project / allowed-roots / danger-full-access path policy
 lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
-lib/agent-tools.ts                  Concrete local tool registry and handlers
-lib/agent-workspace-tools.ts        Read-only workspace file exploration tools
+lib/agent-tools.ts                  Tool groups and registry
+lib/agent-builtins.ts               Built-in read-only local file tools
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
 lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
@@ -569,7 +637,7 @@ flowchart TD
   SamplingLoop --> ToolScheduler
   ToolScheduler --> ToolRuntime
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
-  AgentTools --> WorkspaceTools[lib/agent-workspace-tools.ts]
+  AgentTools --> BuiltinTools[lib/agent-builtins.ts]
   AgentTools --> ResponseItems
   SamplingLoop --> AgentResponse[Final answer plus steps]
 ```
@@ -632,7 +700,7 @@ model loop recoverable while preserving structured `details` in runtime events
 and steps. Permission pauses and denied policy decisions remain fail-closed
 until approval resume exists.
 
-The first production-shaped tool foundation is read-only workspace exploration,
+The first production-shaped tool foundation is read-only local file exploration,
 not shell execution. The current tool set gives the model enough structure to
 inspect files without a process sandbox:
 
@@ -687,7 +755,7 @@ sequenceDiagram
   Route-->>Client: SSE step
   Client-->>UI: onStep(event)
   UI->>UI: dispatch(agentStepReceived)
-  loop Streaming sampling rounds until no tool calls or max rounds
+  loop Streaming sampling rounds until no tool calls
     Agent->>Gateway: Provider-neutral stream request with history and tools
     Gateway->>Model: Dialect-compiled streaming model request with signal
     loop Provider-neutral model stream
@@ -791,14 +859,8 @@ type AgentToolAnnotations = {
 ```
 
 `undefined` means unknown, not false. Unknown hints are treated conservatively.
-The current `inspect_text` tool declares:
-
-```text
-readOnly=true
-destructive=false
-openWorld=false
-idempotent=true
-```
+The current active built-in read-only tools declare `readOnly=true`,
+`destructive=false`, `openWorld=false`, and `idempotent=true`.
 
 Approval policy is run-level configuration:
 
@@ -831,9 +893,10 @@ Current implementation status:
   fail-closed placeholder.
 - Sandbox mode is declared but not enforced yet.
 
-`danger_full_access` belongs to sandbox mode, not to individual tools. It should
-be selected by the user, app, or run configuration. It must not be inferred from
-the model or from a tool call.
+`danger_full_access` is a path/sandbox policy mode, not a fact that a tool can
+claim for itself. It should be selected by the user, app, or run configuration,
+then passed into the runtime policy layer. It must not be inferred from the
+model or from a tool call.
 
 Future decision order should be:
 
@@ -927,8 +990,8 @@ Example file:
 {"timestamp":"...","type":"response_item","payload":{"type":"message","role":"user","content":"..."}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_started","runId":"..."}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"step_created","step":{...}}}
-{"timestamp":"...","type":"response_item","payload":{"type":"function_call","callId":"...","name":"inspect_text","argumentsJson":"..."}}
-{"timestamp":"...","type":"response_item","payload":{"type":"function_call_output","callId":"...","toolName":"inspect_text","output":"Character count: ...","isError":false}}
+{"timestamp":"...","type":"response_item","payload":{"type":"function_call","callId":"...","name":"read","argumentsJson":"..."}}
+{"timestamp":"...","type":"response_item","payload":{"type":"function_call_output","callId":"...","toolName":"read","output":"File: ...","isError":false}}
 {"timestamp":"...","type":"agent_event","payload":{"type":"run_succeeded","result":{"usage":{"totalTokenUsage":{...},"lastTokenUsage":{...},"calls":[...]}}}}
 ```
 
@@ -968,17 +1031,19 @@ lib/tools/*.ts                      Larger tool families
 ```
 
 `lib/agent-tool-runtime.ts` now exists as the first tool lifecycle boundary.
-`lib/agent-tools.ts` now contains the local tool registry:
+`lib/agent-tool-contracts.ts` and `lib/agent-tools.ts` now contain the local
+tool contract, grouping, and registry:
 
 ```text
-tool name -> annotations -> input schema -> handler -> output schema
+tool source/group -> tool name -> annotations/path/execution policy
+                  -> provider-neutral input schema -> handler -> output schema
 ```
 
-The current registry includes the name, annotations, provider-neutral
-`inputSchema`, runtime input parsing, and handler. Handlers return structured
-`AgentToolOutput` values with model-facing `contentText` and internal `details`.
-Output schema is the next part to add when the tool boundary needs stricter
-typed contracts.
+The current registry includes the name, source, group, category, annotations,
+path access, execution metadata, provider-neutral `inputSchema`, runtime input
+parsing, and handler. Handlers return structured `AgentToolOutput` values with
+model-facing `contentText` and internal `details`. Output schema is the next
+part to add when the tool boundary needs stricter typed contracts.
 
 ## Agent Harness Direction
 
@@ -1012,14 +1077,22 @@ The current implementation is intentionally small:
   batch of tool calls.
 - `AgentToolRuntime` wraps concrete tool execution and emits tool lifecycle
   events.
+- `Agent` does not cap the total number of sampling rounds. It relies on user
+  abort, per-tool timeouts, and a repeated-tool-call guard that stops identical
+  tool name + arguments + output loops after three repeats.
 - `AgentPermissions` makes annotation-based approval decisions before tool
   execution.
 - `AgentStreamProjection` maps runtime events to the current frontend SSE
   contract.
+- The frontend splits the same stream into Agent, Debug, and Session pages. The
+  transcript page groups same-round tool calls into collapsible batches without
+  showing runtime round labels; the Debug page keeps complete scrollable
+  JSON/text payloads for model requests, model outputs, tool lifecycle,
+  permission decisions, tool `modelOutput`, and final usage; the Session page
+  loads the run's persisted JSONL records through the session read API.
 - `AgentSessionStore` persists streaming run metadata, turn context, runtime
   events, and model-visible `response_item` records as JSONL.
 - Existing `AgentStep` objects remain the frontend display contract.
-- Existing SSE events remain compatible with the current React UI.
 
 Future work should grow the harness in this order:
 

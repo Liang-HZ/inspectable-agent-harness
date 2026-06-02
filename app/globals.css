@@ -163,9 +163,31 @@ h3 {
   padding: 4px;
 }
 
+.subPageSwitcher {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(82px, 1fr));
+  gap: 4px;
+  border: 1px solid #c7d0d4;
+  border-radius: 8px;
+  background: #f5f8f9;
+  padding: 4px;
+}
+
 .modeButton {
   min-width: 0;
   height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #52646b;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.subPageButton {
+  min-width: 0;
+  height: 32px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -179,6 +201,11 @@ h3 {
   background: #164f62;
   color: #ffffff;
   box-shadow: 0 5px 14px rgba(22, 79, 98, 0.22);
+}
+
+.activeSubPageButton {
+  background: #23343b;
+  color: #ffffff;
 }
 
 .requestForm {
@@ -303,7 +330,9 @@ input {
 }
 
 .answerPanel,
-.tracePanel {
+.tracePanel,
+.debugPanel,
+.sessionPanel {
   min-width: 0;
   border: 1px solid #dde4e7;
   border-radius: 8px;
@@ -401,6 +430,470 @@ pre {
   line-height: 1.5;
 }
 
+.jsonlBlock {
+  max-height: min(70vh, 760px);
+  margin: 14px;
+  overflow: auto;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #101b20;
+  color: #d9f0e8;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.fullJsonBlock {
+  max-height: min(72vh, 720px);
+  resize: vertical;
+}
+
+.debugPanel {
+  display: grid;
+  overflow: hidden;
+}
+
+.sessionPanel {
+  display: grid;
+  overflow: hidden;
+}
+
+.debugSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  border-bottom: 1px solid #dde4e7;
+  padding: 14px;
+}
+
+.compactDebugSummary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 0;
+  padding: 12px 0 0;
+}
+
+.debugSummaryGrid div {
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.debugSummaryGrid strong {
+  display: block;
+  margin-top: 4px;
+  color: #142126;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sessionSummary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  border-bottom: 1px solid #dde4e7;
+  padding: 14px;
+}
+
+.sessionSummary div {
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.sessionSummary strong {
+  display: block;
+  margin-top: 4px;
+  color: #142126;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.debugLabel {
+  color: #52646b;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.modelDebugList,
+.toolDebugList,
+.historyDebugList {
+  display: grid;
+  gap: 12px;
+  border-bottom: 1px solid #dde4e7;
+  padding: 14px;
+}
+
+.toolDebugCard,
+.modelDebugCard,
+.historyCommitCard {
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.toolDebugHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolDebugHeader span {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #66777e;
+  font-size: 12px;
+}
+
+.toolStatus {
+  flex: 0 0 auto;
+  border: 1px solid #bfd0d6;
+  border-radius: 999px;
+  background: #eef6f7;
+  color: #164f62;
+  padding: 4px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.errorToolStatus {
+  border-color: #e0b3b3;
+  background: #fff2f2;
+  color: #9f2e2e;
+}
+
+.debugColumns {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.debugTextBlock {
+  max-height: 260px;
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #f4f7f8;
+  color: #1b2c32;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fullDebugTextBlock {
+  max-height: min(58vh, 560px);
+  resize: vertical;
+}
+
+.debugDetails {
+  min-width: 0;
+  padding: 14px;
+}
+
+.toolDebugCard .debugDetails,
+.modelDebugCard .debugDetails {
+  padding: 12px 0 0;
+}
+
+.debugDetails summary {
+  cursor: pointer;
+  color: #52646b;
+  font-size: 12px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.historyItemList {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.historyItemRow {
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 8px 10px;
+}
+
+.historyItemRow summary {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.36fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.historyItemRow span {
+  min-width: 0;
+  color: #52646b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.eventList {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.eventRow {
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+}
+
+.eventRow summary {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.eventRow span {
+  min-width: 0;
+  color: #52646b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.debugPanel .emptyState,
+.sessionPanel .emptyState {
+  min-height: 104px;
+  border-bottom: 1px solid #dde4e7;
+}
+
+.agentTranscript {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.transcriptRound {
+  display: grid;
+  gap: 10px;
+}
+
+.assistantText {
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.assistantMarkdown {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.assistantMarkdown > :first-child {
+  margin-top: 0;
+}
+
+.assistantMarkdown > :last-child {
+  margin-bottom: 0;
+}
+
+.assistantMarkdown p,
+.assistantMarkdown ul,
+.assistantMarkdown ol,
+.assistantMarkdown blockquote,
+.assistantMarkdown pre,
+.assistantMarkdown table {
+  margin: 0 0 12px;
+}
+
+.assistantMarkdown ul,
+.assistantMarkdown ol {
+  padding-left: 22px;
+}
+
+.assistantMarkdown li + li {
+  margin-top: 4px;
+}
+
+.assistantMarkdown code {
+  max-width: none;
+  overflow: visible;
+  border-radius: 6px;
+  background: #edf3f5;
+  color: #174c5a;
+  padding: 2px 5px;
+  font-size: 0.92em;
+  text-overflow: clip;
+  text-transform: none;
+  white-space: normal;
+}
+
+.assistantMarkdown pre {
+  overflow: auto;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #101b20;
+  color: #d9f0e8;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.assistantMarkdown pre code {
+  display: block;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  white-space: pre;
+}
+
+.assistantMarkdown blockquote {
+  border-left: 3px solid #c8d1d5;
+  color: #52646b;
+  padding-left: 12px;
+}
+
+.assistantMarkdown table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.assistantMarkdown th,
+.assistantMarkdown td {
+  border: 1px solid #d8e1e4;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.assistantMarkdown th {
+  background: #eef3f5;
+}
+
+.liveAssistantText {
+  color: #203137;
+}
+
+.workBatch,
+.stepShelf {
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.workBatch > summary,
+.stepShelf > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  padding: 12px 14px;
+  color: #52646b;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.workBatch > summary strong,
+.stepShelf > summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #142126;
+  font-size: 13px;
+}
+
+.toolBatchList {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #dde4e7;
+  background: #f7f9fa;
+  padding: 12px 14px;
+}
+
+.compactToolCard {
+  min-width: 0;
+  border-bottom: 1px solid #dde4e7;
+  padding: 8px 0 12px;
+}
+
+.compactToolCard:last-child {
+  border-bottom: 0;
+}
+
+.toolRunHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolRunHeader span {
+  display: block;
+  margin-top: 3px;
+  color: #66777e;
+  font-size: 12px;
+}
+
+.toolRunGrid {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.toolPayloadDisclosure {
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.toolPayloadDisclosure summary {
+  cursor: pointer;
+  padding: 10px;
+  color: #52646b;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.toolPayloadDisclosure pre {
+  max-height: 220px;
+  overflow: auto;
+  border-top: 1px solid #d8e1e4;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.stepShelf {
+  overflow: hidden;
+}
+
+.stepShelf .emptyState {
+  min-height: 120px;
+  border-top: 1px solid #dde4e7;
+}
+
+.stepShelf .traceList {
+  border-top: 1px solid #dde4e7;
+}
+
 .emptyState,
 .errorState {
   display: grid;
@@ -447,7 +940,15 @@ pre {
   }
 
   .modeSwitcher,
-  .controlGrid {
+  .subPageSwitcher,
+  .controlGrid,
+  .debugSummaryGrid,
+  .compactDebugSummary,
+  .sessionSummary,
+  .debugColumns,
+  .toolRunGrid,
+  .historyItemRow summary,
+  .eventRow summary {
     grid-template-columns: 1fr;
   }
 }

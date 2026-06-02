@@ -1,102 +1,52 @@
-import * as z from 'zod';
-
-import type { AgentModelToolDefinition } from './agent-model-types';
-import type { AgentToolAnnotations } from './agent-permissions';
+import { builtinReadOnlyToolDefinitions } from './agent-builtins';
 import {
-  AgentToolRespondToModelError,
-  createSuccessToolOutput,
-  type AgentToolOutput,
-} from './agent-tool-output';
-import { workspaceReadToolDefinitions } from './agent-workspace-tools';
+  toolDefinitionsToModelTools,
+  type AgentToolDefinition,
+  type AgentToolDefinitionGroup,
+  type AgentToolExecution,
+  type AgentToolExecutionMode,
+  type AgentToolResult,
+} from './agent-tool-contracts';
 
-const INSPECT_TEXT_TOOL_NAME = 'inspect_text';
+export type {
+  AgentToolDefinition,
+  AgentToolDefinitionGroup,
+  AgentToolExecution,
+  AgentToolExecutionMode,
+  AgentToolResult,
+} from './agent-tool-contracts';
 
-export type AgentToolExecutionMode = 'sequential' | 'parallel';
+export const builtinUtilityToolDefinitions: AgentToolDefinition[] = [];
 
-const inspectTextInputSchema = z.strictObject({
-  text: z.string(),
-});
+export const builtinEditingToolDefinitions: AgentToolDefinition[] = [];
 
-type InspectTextInput = z.infer<typeof inspectTextInputSchema>;
+export const builtinShellToolDefinitions: AgentToolDefinition[] = [];
 
-type InspectTextResult = {
-  characterCount: number;
-  lineCount: number;
-  wordCount: number;
-  preview: string;
-};
-
-export type AgentToolResult = {
-  input: unknown;
-  output: AgentToolOutput;
-};
-
-export type AgentToolDefinition = {
-  name: string;
-  annotations: AgentToolAnnotations;
-  executionMode?: AgentToolExecutionMode;
-  modelTool: AgentModelToolDefinition;
-  execute: (
-    argumentsJson: string,
-    signal: AbortSignal | undefined,
-  ) => AgentToolResult | Promise<AgentToolResult>;
-  timeoutMs?: number;
-};
-
-export type AgentToolExecution = {
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-  output: AgentToolOutput;
-  modelOutput: string;
-  isError: boolean;
-  durationMs: number;
-};
-
-const inspectTextToolDefinition = {
-  name: INSPECT_TEXT_TOOL_NAME,
-  annotations: {
-    readOnly: true,
-    destructive: false,
-    openWorld: false,
-    idempotent: true,
+export const agentToolGroups: AgentToolDefinitionGroup[] = [
+  {
+    name: 'utility_builtins',
+    source: 'builtin',
+    tools: builtinUtilityToolDefinitions,
   },
-  executionMode: 'parallel',
-  modelTool: {
-    name: INSPECT_TEXT_TOOL_NAME,
-    description:
-      'Inspect plain text and return character, line, and word counts. Use this when the user asks about length, counts, or basic text statistics.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        text: {
-          type: 'string',
-          description: 'The exact text to inspect.',
-        },
-      },
-      required: ['text'],
-    },
-    schemaStrict: true,
+  {
+    name: 'read_only_builtins',
+    source: 'builtin',
+    tools: builtinReadOnlyToolDefinitions,
   },
-  execute: (argumentsJson: string): AgentToolResult => {
-    const input = parseInspectTextInput(argumentsJson);
-    const result = inspectText(input);
-
-    return {
-      input: input,
-      output: createSuccessToolOutput({
-        contentText: formatInspectTextResult(result),
-        details: result,
-      }),
-    };
+  {
+    name: 'editing_builtins',
+    source: 'builtin',
+    tools: builtinEditingToolDefinitions,
   },
-} satisfies AgentToolDefinition;
-
-export const agentToolDefinitions: AgentToolDefinition[] = [
-  inspectTextToolDefinition,
-  ...workspaceReadToolDefinitions,
+  {
+    name: 'shell_builtins',
+    source: 'builtin',
+    tools: builtinShellToolDefinitions,
+  },
 ];
+
+export const agentToolDefinitions: AgentToolDefinition[] =
+  agentToolGroups.flatMap((group) => group.tools);
 
 export const agentToolRegistry = new Map<string, AgentToolDefinition>(
   agentToolDefinitions.map((toolDefinition) => [
@@ -105,52 +55,4 @@ export const agentToolRegistry = new Map<string, AgentToolDefinition>(
   ]),
 );
 
-export const agentTools: AgentModelToolDefinition[] = agentToolDefinitions.map(
-  (toolDefinition) => toolDefinition.modelTool,
-);
-
-function countWords(text: string): number {
-  const matches = text.trim().match(/\S+/g);
-  return matches === null ? 0 : matches.length;
-}
-
-function inspectText(input: InspectTextInput) {
-  return {
-    characterCount: input.text.length,
-    lineCount: input.text === '' ? 0 : input.text.split(/\r\n|\r|\n/).length,
-    wordCount: countWords(input.text),
-    preview: input.text.slice(0, 120),
-  } satisfies InspectTextResult;
-}
-
-function formatInspectTextResult(result: InspectTextResult): string {
-  return [
-    `Character count: ${result.characterCount}`,
-    `Line count: ${result.lineCount}`,
-    `Word count: ${result.wordCount}`,
-    `Preview: ${result.preview}`,
-  ].join('\n');
-}
-
-function parseInspectTextInput(argumentsJson: string): InspectTextInput {
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(argumentsJson);
-  } catch {
-    throw new AgentToolRespondToModelError(
-      'VALIDATION_ERROR',
-      'Tool `inspect_text` received invalid JSON arguments.',
-    );
-  }
-
-  const parsedInput = inspectTextInputSchema.safeParse(parsedJson);
-
-  if (!parsedInput.success) {
-    throw new AgentToolRespondToModelError(
-      'VALIDATION_ERROR',
-      'Tool `inspect_text` received invalid arguments.',
-    );
-  }
-
-  return parsedInput.data;
-}
+export const agentTools = toolDefinitionsToModelTools(agentToolDefinitions);

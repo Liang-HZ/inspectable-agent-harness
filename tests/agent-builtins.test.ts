@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 
+import type { AgentEvent } from '../lib/agent-events';
 import type { AgentModelToolCall } from '../lib/agent-model-types';
 import { createAgentRunContext } from '../lib/agent-run-context';
 import { executeAgentToolCall } from '../lib/agent-tool-runtime';
 import type { AgentToolDefinition } from '../lib/agent-tools';
 import { agentToolRegistry } from '../lib/agent-tools';
+import { noPathAccessPolicy } from '../lib/agent-path-policy';
 
 const originalInfo = console.info;
 
@@ -28,10 +30,7 @@ function createToolCall(
   };
 }
 
-async function executeWorkspaceTool(
-  name: string,
-  args: Record<string, unknown>,
-) {
+async function executeBuiltinTool(name: string, args: Record<string, unknown>) {
   return executeAgentToolCall(
     createToolCall(name, args),
     createAgentRunContext({ runId: `test-${name}` }),
@@ -46,8 +45,8 @@ function readResultObject(value: unknown): Record<string, unknown> {
 }
 
 test('read returns file contents with line metadata', async () => {
-  const execution = await executeWorkspaceTool('read', {
-    path: 'tests/fixtures/workspace-tools/src/example.ts',
+  const execution = await executeBuiltinTool('read', {
+    path: 'tests/fixtures/builtin-tools/src/example.ts',
     limit: 20,
   });
 
@@ -55,27 +54,27 @@ test('read returns file contents with line metadata', async () => {
   assert.equal(execution.output.type, 'success');
   assert.match(execution.modelOutput, /meaningfulFunction/);
   const result = readResultObject(execution.output.details);
-  assert.equal(result.path, 'tests/fixtures/workspace-tools/src/example.ts');
+  assert.equal(result.path, 'tests/fixtures/builtin-tools/src/example.ts');
   assert.equal(result.startLine, 1);
   assert.equal(result.truncated, false);
   assert.equal(result.notice, null);
   assert.match(String(result.content), /meaningfulFunction/);
 });
 
-test('read rejects paths outside the workspace root as a tool error', async () => {
-  const execution = await executeWorkspaceTool('read', {
+test('read rejects paths outside the current allowed root as a tool error', async () => {
+  const execution = await executeBuiltinTool('read', {
     path: '../package.json',
   });
 
   assert.equal(execution.isError, true);
   assert.equal(execution.output.type, 'respond_to_model');
-  assert.equal(execution.output.error.code, 'PATH_OUTSIDE_WORKSPACE');
-  assert.match(execution.modelOutput, /^Error \[PATH_OUTSIDE_WORKSPACE\]:/);
+  assert.equal(execution.output.error.code, 'PATH_OUTSIDE_ALLOWED_ROOT');
+  assert.match(execution.modelOutput, /^Error \[PATH_OUTSIDE_ALLOWED_ROOT\]:/);
 });
 
 test('read reports pagination notice when output is line-limited', async () => {
-  const execution = await executeWorkspaceTool('read', {
-    path: 'tests/fixtures/workspace-tools/docs/long.txt',
+  const execution = await executeBuiltinTool('read', {
+    path: 'tests/fixtures/builtin-tools/docs/long.txt',
     limit: 2,
   });
 
@@ -92,8 +91,8 @@ test('read reports pagination notice when output is line-limited', async () => {
 });
 
 test('read accepts OpenAI strict-mode null optional arguments', async () => {
-  const execution = await executeWorkspaceTool('read', {
-    path: 'tests/fixtures/workspace-tools/src/example.ts',
+  const execution = await executeBuiltinTool('read', {
+    path: 'tests/fixtures/builtin-tools/src/example.ts',
     offset: null,
     limit: null,
   });
@@ -105,10 +104,37 @@ test('read accepts OpenAI strict-mode null optional arguments', async () => {
   assert.match(String(result.content), /meaningfulFunction/);
 });
 
+test('tool permission event includes runtime contract metadata', async () => {
+  const events: AgentEvent[] = [];
+  await executeAgentToolCall(
+    createToolCall('read', {
+      path: 'tests/fixtures/builtin-tools/src/example.ts',
+    }),
+    createAgentRunContext({ runId: 'test-permission-metadata' }),
+    {
+      onEvent: (event) => events.push(event),
+    },
+  );
+  const permissionEvent = events.find(
+    (event) => event.type === 'tool_permission_decided',
+  );
+
+  assert.notEqual(permissionEvent, undefined);
+  if (permissionEvent?.type !== 'tool_permission_decided') {
+    throw new Error('Expected tool_permission_decided event.');
+  }
+
+  assert.equal(permissionEvent.request.source, 'builtin');
+  assert.equal(permissionEvent.request.group, 'read_only_builtins');
+  assert.equal(permissionEvent.request.category, 'read');
+  assert.equal(permissionEvent.request.pathAccess.type, 'current_project');
+  assert.equal(permissionEvent.request.executionMode, 'parallel');
+});
+
 test('grep returns structured matches from ripgrep', async () => {
-  const execution = await executeWorkspaceTool('grep', {
+  const execution = await executeBuiltinTool('grep', {
     pattern: 'meaningfulFunction',
-    path: 'tests/fixtures/workspace-tools',
+    path: 'tests/fixtures/builtin-tools',
     limit: 10,
   });
 
@@ -117,18 +143,15 @@ test('grep returns structured matches from ripgrep', async () => {
   const result = readResultObject(execution.output.details);
   const matches = result.matches as Array<Record<string, unknown>>;
   assert.equal(matches.length, 1);
-  assert.equal(
-    matches[0].path,
-    'tests/fixtures/workspace-tools/src/example.ts',
-  );
+  assert.equal(matches[0].path, 'tests/fixtures/builtin-tools/src/example.ts');
   assert.equal(matches[0].lineNumber, 1);
   assert.match(String(matches[0].line), /meaningfulFunction/);
 });
 
 test('grep reports a limit notice when matches are truncated', async () => {
-  const execution = await executeWorkspaceTool('grep', {
-    pattern: 'workspace-search-marker',
-    path: 'tests/fixtures/workspace-tools',
+  const execution = await executeBuiltinTool('grep', {
+    pattern: 'builtin-search-marker',
+    path: 'tests/fixtures/builtin-tools',
     limit: 1,
   });
 
@@ -142,10 +165,10 @@ test('grep reports a limit notice when matches are truncated', async () => {
   assert.match(String(result.notice), /1 match limit reached/);
 });
 
-test('find returns matching workspace file paths', async () => {
-  const execution = await executeWorkspaceTool('find', {
+test('find returns matching project file paths', async () => {
+  const execution = await executeBuiltinTool('find', {
     pattern: '*.ts',
-    path: 'tests/fixtures/workspace-tools',
+    path: 'tests/fixtures/builtin-tools',
     limit: 10,
   });
 
@@ -153,13 +176,13 @@ test('find returns matching workspace file paths', async () => {
   assert.equal(execution.output.type, 'success');
   const result = readResultObject(execution.output.details);
   assert.deepEqual(result.paths, [
-    'tests/fixtures/workspace-tools/src/example.ts',
+    'tests/fixtures/builtin-tools/src/example.ts',
   ]);
 });
 
 test('ls returns directory entries with deterministic order', async () => {
-  const execution = await executeWorkspaceTool('ls', {
-    path: 'tests/fixtures/workspace-tools',
+  const execution = await executeBuiltinTool('ls', {
+    path: 'tests/fixtures/builtin-tools',
     limit: 10,
   });
 
@@ -232,6 +255,9 @@ function createSlowToolDefinition(
 ): AgentToolDefinition {
   return {
     name: name,
+    source: 'builtin',
+    group: 'utility_builtins',
+    category: 'utility',
     annotations: {
       readOnly: true,
       destructive: false,
@@ -240,6 +266,8 @@ function createSlowToolDefinition(
     },
     executionMode: 'parallel',
     timeoutMs: timeoutMs,
+    abortable: true,
+    pathAccess: noPathAccessPolicy,
     modelTool: {
       name: name,
       description: 'Test-only slow tool.',

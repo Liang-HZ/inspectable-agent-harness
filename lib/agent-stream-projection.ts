@@ -17,6 +17,104 @@ export function projectAgentEventToStreamEvent(
         delta: event.delta,
       };
 
+    case 'run_started':
+      return {
+        type: 'debug',
+        event: {
+          type: 'runStarted',
+          runId: event.runId,
+        },
+      };
+
+    case 'model_started':
+      return {
+        type: 'debug',
+        event: {
+          type: 'modelStarted',
+          stage: event.stage,
+        },
+      };
+
+    case 'model_requested':
+      return {
+        type: 'debug',
+        event: {
+          type: 'modelRequested',
+          round: event.round,
+          model: event.model,
+          wireApi: event.wireApi,
+          request: event.request,
+        },
+      };
+
+    case 'model_completed':
+      return {
+        type: 'debug',
+        event: {
+          type: 'modelCompleted',
+          round: event.round,
+          model: event.model,
+          streamedAssistantText: event.streamedAssistantText,
+          assistantMessages: event.assistantMessages,
+          toolCalls: event.toolCalls,
+          usage: event.usage,
+        },
+      };
+
+    case 'tool_requested':
+      return {
+        type: 'debug',
+        event: {
+          type: 'toolRequested',
+          toolRequests: event.toolRequests,
+        },
+      };
+
+    case 'tool_started':
+      return {
+        type: 'debug',
+        event: {
+          type: 'toolStarted',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          argumentsJson: event.argumentsJson,
+        },
+      };
+
+    case 'tool_finished':
+      return {
+        type: 'debug',
+        event: {
+          type: 'toolFinished',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: event.input,
+          result: event.result,
+          modelOutput: event.modelOutput,
+          isError: event.isError,
+        },
+      };
+
+    case 'tool_permission_decided':
+      return {
+        type: 'debug',
+        event: {
+          type: 'toolPermissionDecided',
+          request: event.request,
+          decision: event.decision,
+        },
+      };
+
+    case 'approval_requested':
+      return {
+        type: 'debug',
+        event: {
+          type: 'approvalRequested',
+          request: event.request,
+          decision: event.decision,
+        },
+      };
+
     case 'run_succeeded':
       return {
         type: 'done',
@@ -29,14 +127,13 @@ export function projectAgentEventToStreamEvent(
         error: event.error,
       };
 
-    case 'run_started':
-    case 'model_started':
-    case 'tool_requested':
-    case 'tool_permission_decided':
-    case 'approval_requested':
-    case 'tool_started':
-    case 'tool_finished':
     case 'run_cancelled':
-      return undefined;
+      return {
+        type: 'debug',
+        event: {
+          type: 'runCancelled',
+          reason: event.reason,
+        },
+      };
   }
 }

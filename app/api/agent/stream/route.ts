@@ -98,6 +98,14 @@ export async function POST(request: NextRequest) {
 
               controller.enqueue(encodeAgentStreamEvent(streamEvent));
             },
+            onDebugEvent: (event) => {
+              controller.enqueue(
+                encodeAgentStreamEvent({
+                  type: 'debug',
+                  event: event,
+                }),
+              );
+            },
           },
         );
 

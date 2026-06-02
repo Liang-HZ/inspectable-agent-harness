@@ -473,7 +473,7 @@
             <span class="tag">TypeScript</span>
             <span class="tag">OpenAI Chat + Responses</span>
             <span class="tag">Streaming Sampling Loop</span>
-            <span class="tag">Workspace Read Tools</span>
+            <span class="tag">Built-In Read-Only Tools</span>
             <span class="tag">JSONL Sessions</span>
           </div>
         </header>
@@ -505,7 +505,7 @@
             <div class="panel">
               <h3>工具系统</h3>
               <p>
-                现在有 <code>inspect_text</code>，以及真正用于 workspace 探查的
+                当前工具面聚焦真实 local file 探查：
                 <code>ls</code
                 >、<code>find</code>、<code>grep</code>、<code>read</code>。
               </p>
@@ -529,7 +529,7 @@
               <h3>测试基础</h3>
               <p>
                 有 fake <code>AgentModelGateway</code> 的 deterministic
-                sampling-loop 测试，也有真实 workspace tool runtime
+                sampling-loop 测试，也有真实 built-in tool runtime
                 测试，覆盖成功、错误、截断和集成链路。
               </p>
             </div>
@@ -656,13 +656,15 @@
                 <tr>
                   <td>Tool Registry</td>
                   <td>
-                    <code>lib/agent-tools.ts</code><br /><code
-                      >lib/agent-workspace-tools.ts</code
+                    <code>lib/agent-tool-contracts.ts</code><br /><code
+                      >lib/agent-tools.ts</code
+                    ><br /><code>lib/agent-path-policy.ts</code><br /><code
+                      >lib/agent-builtins.ts</code
                     >
                   </td>
                   <td>
-                    声明工具契约、annotations、inputSchema、Zod parsing、具体
-                    handler。
+                    声明 source/group/category、annotations、path policy、
+                    executionMode、inputSchema、Zod parsing、具体 handler。
                   </td>
                   <td>
                     不决定 provider wire 格式，不决定全局 approval policy。
@@ -723,9 +725,19 @@
               >，并行和串行调度。
             </li>
             <li>
-              <a href="../lib/agent-workspace-tools.ts"
-                ><code>lib/agent-workspace-tools.ts</code></a
-              >，workspace read tools。
+              <a href="../lib/agent-tool-contracts.ts"
+                ><code>lib/agent-tool-contracts.ts</code></a
+              >，provider-neutral tool source/group/path/execution contract。
+            </li>
+            <li>
+              <a href="../lib/agent-path-policy.ts"
+                ><code>lib/agent-path-policy.ts</code></a
+              >，current-project、allowed-roots、danger-full-access 路径策略。
+            </li>
+            <li>
+              <a href="../lib/agent-builtins.ts"
+                ><code>lib/agent-builtins.ts</code></a
+              >，built-in read-only tools。
             </li>
             <li>
               <a href="../lib/agent-events.ts"
@@ -748,9 +760,14 @@
               >，loop contract 测试。
             </li>
             <li>
-              <a href="../tests/agent-workspace-tools.test.ts"
-                ><code>tests/agent-workspace-tools.test.ts</code></a
-              >，workspace tools 真测试。
+              <a href="../tests/agent-builtins.test.ts"
+                ><code>tests/agent-builtins.test.ts</code></a
+              >，built-in tools 真测试。
+            </li>
+            <li>
+              <a href="../tests/agent-tool-contracts.test.ts"
+                ><code>tests/agent-tool-contracts.test.ts</code></a
+              >，tool groups、provider boundary 和 path policy 测试。
             </li>
           </ul>
         </section>
@@ -953,13 +970,14 @@ return SamplingRoundResult</code></pre>
                 loop 负责根据 round result 改写
                 history、执行工具、决定是否继续。
               </p>
-              <pre><code>for round in 1..MAX_AGENT_ROUNDS:
+              <pre><code>for round in 1..:
   roundResult = runSamplingRound(history)
   if roundResult.toolCalls is empty:
     append final assistant message
     return final answer
   append working message + function_call
   execute tool batch
+  stop if identical tool loop repeats
   append function_call_output
   continue</code></pre>
             </div>
@@ -1060,6 +1078,8 @@ return SamplingRoundResult</code></pre>
               <h3>内部 AgentEvent</h3>
               <pre><code>run_started
 model_started
+model_requested
+model_completed
 assistant_delta
 tool_requested
 tool_permission_decided
@@ -1074,11 +1094,26 @@ run_cancelled</code></pre>
               <h3>前端 SSE 投影</h3>
               <pre><code>step_created -> step
 assistant_delta -> assistantDelta
+model_requested -> debug.modelRequested
+model_completed -> debug.modelCompleted
+tool_requested -> debug.toolRequested
+tool_started -> debug.toolStarted
+tool_finished -> debug.toolFinished
 run_succeeded -> done
 run_failed -> error</code></pre>
               <p>
-                工具生命周期事件目前只在服务端日志和 JSONL session
-                中保留，还没有投影到 UI。
+                Debug Console v1 会显示每轮模型 input 和 output、history
+                commit、工具参数、模型可见 tool output、内部 details 和
+                usage。浏览器仍然只是观察者，不执行工具。history commit 通过
+                stream-only debug 事件展示，不写入 JSONL 的 agent_event；JSONL
+                里的权威上下文仍然是 response_item。
+              </p>
+              <p>
+                当前前端把同一条 run 分成 Agent、Debug 和 Session
+                三个页面：Agent 页面用用户可理解的“模型输出 / 使用工具”串联
+                assistant 文本和同批 tool calls，不暴露 round 这类 runtime
+                术语；Debug 页面保留完整 request/output/details 供排查；Session
+                页面直接读取当前 run 的真实 JSONL 落盘记录。
               </p>
             </div>
           </div>
@@ -1164,7 +1199,7 @@ run_failed -> error</code></pre>
         <section id="tools">
           <h2>工具系统：现在有哪些能力</h2>
           <p class="lead">
-            工具系统当前重点是 workspace 只读探查。我们故意还没有做 bash 和
+            工具系统当前重点是内置只读 local file 探查。我们故意还没有做 bash 和
             edit，因为它们会引入 sandbox、审批、并发写入和进程管理复杂度。
           </p>
           <div class="table-wrap">
@@ -1179,17 +1214,11 @@ run_failed -> error</code></pre>
               </thead>
               <tbody>
                 <tr>
-                  <td><code>inspect_text</code></td>
-                  <td><code>text</code></td>
-                  <td>字符数、行数、词数、preview。</td>
-                  <td>纯内存文本分析。</td>
-                </tr>
-                <tr>
                   <td><code>ls</code></td>
                   <td><code>path?</code>、<code>limit?</code></td>
                   <td>目录 entries，按名称稳定排序。</td>
                   <td>
-                    workspace root jail，忽略
+                    当前 project-root path policy，忽略
                     <code>.git</code
                     >、<code>.next</code>、<code>node_modules</code>。
                   </td>
@@ -1202,7 +1231,7 @@ run_failed -> error</code></pre>
                     >
                   </td>
                   <td>匹配文件路径，limit notice。</td>
-                  <td>只递归 workspace 内文件，不跟随 symlink 逃逸。</td>
+                  <td>只递归当前允许根目录内文件，不跟随 symlink 逃逸。</td>
                 </tr>
                 <tr>
                   <td><code>grep</code></td>
@@ -1213,7 +1242,7 @@ run_failed -> error</code></pre>
                     >
                   </td>
                   <td>path、lineNumber、line，超限时给 refine notice。</td>
-                  <td>通过本机 <code>rg</code> 搜索 workspace 内文件。</td>
+                  <td>通过本机 <code>rg</code> 搜索当前允许根目录内文件。</td>
                 </tr>
                 <tr>
                   <td><code>read</code></td>
@@ -1301,8 +1330,29 @@ destructive?: boolean
 openWorld?: boolean
 idempotent?: boolean</code></pre>
               <p>
-                当前 workspace tools 都是
+                当前 built-in tools 都是
                 readOnly、non-destructive、closed-world、idempotent。
+              </p>
+            </div>
+            <div class="panel">
+              <h3>Tool Contract</h3>
+              <pre><code>source:
+  builtin | dynamic | mcp | hosted
+
+group:
+  utility_builtins
+  read_only_builtins
+  editing_builtins
+  shell_builtins
+
+pathAccess:
+  none
+  current_project
+  allowed_roots
+  danger_full_access</code></pre>
+              <p>
+                Provider dialect 只消费 <code>modelTool</code>；这些 runtime
+                metadata 留给调度、权限、debug 和未来 telemetry。
               </p>
             </div>
             <div class="panel">
@@ -1345,7 +1395,8 @@ sandboxMode:
           <p>
             当前有 <code>GET /api/agent/sessions</code> 和
             <code>GET /api/agent/sessions/:id</code>
-            用于本地检查 session，但还没有 resume。
+            用于本地检查 session，但还没有 resume。前端 Session tab 也是通过
+            这个只读 API 打印 JSONL，一行对应一个真实 session record。
           </p>
         </section>
 
@@ -1413,9 +1464,8 @@ sandboxMode:
               <h3>Phase 1：小型可检查 Agent</h3>
               <p>
                 加入
-                <code>/api/agent</code
-                >、<code>/api/agent/stream</code>、<code>inspect_text</code>。这是
-                demo-shaped agent，让模型和工具链路先可见。
+                <code>/api/agent</code> 和 <code>/api/agent/stream</code>。最早曾用
+                toy tool 验证工具链路，后来在 read-only built-ins 落地后移除。
               </p>
             </div>
             <div class="time-item">
@@ -1523,10 +1573,11 @@ sandboxMode:
               </p>
             </div>
             <div class="time-item">
-              <h3>Phase 17：Workspace Read Tools</h3>
+              <h3>Phase 17：Built-In Read-Only Tools</h3>
               <p>
                 加入 <code>ls/find/grep/read</code>，不再只靠玩具工具。它们有
-                workspace jail、limit notice 和真实 runtime 测试。
+                当前 project-root path policy、limit notice 和真实 runtime
+                测试。
               </p>
             </div>
             <div class="time-item">
@@ -1535,6 +1586,43 @@ sandboxMode:
                 工具 IR 从 OpenAI 字段名中抽出来，使用
                 <code>inputSchema/schemaStrict</code>。OpenAI dialect 再映射成
                 <code>parameters/strict</code>。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 19：OpenAI Strict Schema Adapter</h3>
+              <p>
+                OpenAI strict tools 要求所有 properties 都进
+                <code>required</code>，optional 用 <code>null</code>
+                类型表示。这个转换被关进 OpenAI dialect 边界。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 20：Frontend Debug Console</h3>
+              <p>
+                前端开始展示每一轮模型输入、工具 lifecycle、模型可见
+                <code>modelOutput</code>、内部 details 和 usage，用来验证 agent
+                runtime。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 21：Agent / Debug / Session 页面拆分</h3>
+              <p>
+                Agent
+                页面改成用户视角的过程流：模型文本和工具批次串联展示，steps
+                收起作为摘要。模型文本按 Markdown 渲染，支持列表、表格和代码块。
+                Debug 页面保留完整可滚动的 JSON 和文本 payload。Session 页面
+                打印当前 run 的 JSONL，方便对照真实 resume/replay 记录。
+              </p>
+            </div>
+            <div class="time-item">
+              <h3>Phase 22：Tool Runtime Boundary v1</h3>
+              <p>
+                工具定义拆出 <code>source/group/category</code>、
+                <code>pathAccess</code>、<code>executionMode</code>、
+                <code>timeoutMs</code> 和 <code>abortable</code>。当前只激活
+                <code>utility_builtins</code> 与
+                <code>read_only_builtins</code>，<code>editing_builtins</code>
+                和 <code>shell_builtins</code> 先作为空骨架。
               </p>
             </div>
           </div>
@@ -1627,7 +1715,7 @@ sandboxMode:
                 <tr>
                   <td>Write/Edit tools</td>
                   <td>涉及文件写入、diff、回滚、冲突、用户确认。</td>
-                  <td>workspace_write sandbox 和更细的 permission policy。</td>
+                  <td>local write sandbox 和更细的 permission policy。</td>
                 </tr>
                 <tr>
                   <td>Interactive approval resume</td>
@@ -1649,10 +1737,11 @@ sandboxMode:
           </div>
           <div class="warning note">
             <strong>当前 build 现实：</strong>
-            因为 workspace read tools 有意允许读取当前项目根目录，Next/Turbopack
-            build 会提示动态 filesystem tracing warning。构建通过，但这个
-            warning 说明未来如果要 serverless packaging，需要更明确地处理
-            workspace root 的打包边界。
+            因为 built-in read-only tools
+            有意允许读取当前项目根目录，Next/Turbopack build 会提示动态
+            filesystem tracing warning。构建通过，但这个 warning 说明未来如果要
+            serverless packaging，需要更明确地处理 current project root
+            的打包边界。
           </div>
         </section>
       </main>

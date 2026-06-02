@@ -94,8 +94,8 @@ The first agent response includes the final answer plus inspectable steps:
 curl -N -X POST http://localhost:3000/api/agent/stream \
   -H 'Content-Type: application/json' \
   -d '{
-    "task": "请统计这段文本的字符数、行数和词数：hello world\nsecond line",
-    "goal": "请使用可用工具得到准确统计",
+    "task": "帮我找出当前项目里 agent 工具注册相关的文件，并解释它们的关系。",
+    "goal": "请使用本地文件探索工具完成，不要只凭记忆回答。",
     "temperature": 0
   }'
 ```
@@ -133,3 +133,11 @@ JSON. The service layer should receive plain TypeScript objects instead of `Next
 
 For the current project map and module responsibilities, see
 [`docs/architecture.md`](docs/architecture.md).
+
+For a chaptered walkthrough of how the current agent harness evolved, start at
+the bilingual tutorial hub [`tutorial/README.md`](tutorial/README.md). The
+English path lives at [`tutorial/en/README.md`](tutorial/en/README.md), and the
+Chinese path lives at [`tutorial/zh/README.md`](tutorial/zh/README.md). The
+tutorial explains the design path from the initial Next.js API boundary through
+the streaming sampling loop, real read-only tools, provider dialects, Debug
+Console, JSONL sessions, tool runtime contracts, and loop guardrails.

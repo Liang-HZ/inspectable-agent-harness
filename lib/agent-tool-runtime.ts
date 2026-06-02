@@ -22,12 +22,11 @@ import {
   type AgentToolExecution,
   type AgentToolResult,
 } from './agent-tools';
+import { DEFAULT_AGENT_TOOL_TIMEOUT_MS } from './agent-tool-contracts';
 
 type AgentToolRuntimeCallbacks = {
   onEvent?: (event: AgentEvent) => void;
 };
-
-const DEFAULT_AGENT_TOOL_TIMEOUT_MS = 10_000;
 
 function createToolRequestEvent(toolCalls: AgentModelToolCall[]): AgentEvent {
   return {
@@ -56,6 +55,7 @@ function createToolFinishedEvent(execution: AgentToolExecution): AgentEvent {
     toolName: execution.toolName,
     input: execution.input,
     result: execution.output,
+    modelOutput: execution.modelOutput,
     isError: execution.isError,
   };
 }
@@ -70,6 +70,11 @@ function createPermissionRequest(
     toolName: toolDefinition.name,
     argumentsJson: toolCall.argumentsJson,
     annotations: toolDefinition.annotations,
+    source: toolDefinition.source,
+    group: toolDefinition.group,
+    category: toolDefinition.category,
+    pathAccess: toolDefinition.pathAccess,
+    executionMode: toolDefinition.executionMode,
     approvalPolicy: context.policy.approvalPolicy,
     sandboxMode: context.policy.sandboxMode,
   };
@@ -133,7 +138,7 @@ async function executeToolWithRuntimeLimits(
   toolCall: AgentModelToolCall,
   context: AgentRunContext,
 ): Promise<AgentToolResult> {
-  const timeoutMs = toolDefinition.timeoutMs ?? DEFAULT_AGENT_TOOL_TIMEOUT_MS;
+  const timeoutMs = toolDefinition.timeoutMs;
   const toolAbortController = new AbortController();
 
   return new Promise<AgentToolResult>((resolve, reject) => {

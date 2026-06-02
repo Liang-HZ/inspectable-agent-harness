@@ -8,6 +8,10 @@ learning path behind the current architecture.
 
 `docs/architecture.md` describes the current shape of the system.
 
+`tutorial/README.md` is the bilingual tutorial hub. `tutorial/en/README.md`
+turns the same history into a chaptered English learning path, and
+`tutorial/zh/README.md` is the Chinese version.
+
 This document describes how we got there:
 
 - what problem each step was trying to solve
@@ -57,7 +61,8 @@ It introduced:
 - `AgentInput`
 - `AgentResult`
 - `AgentStep`
-- one local tool: `inspect_text`
+- one temporary local toy tool, later removed when real file-exploration tools
+  became the testing surface
 
 The initial flow was:
 
@@ -351,9 +356,13 @@ call model with history and tools
 record function_call items
 execute one batch of tools
 record function_call_output items
-repeat until no tool calls or max rounds
+repeat until no tool calls
 stream final answer with accumulated history
 ```
+
+There is no global sampling-round cap. Runaway protection is handled by narrower
+runtime controls: user abort, per-tool timeout, and a repeated-tool-call guard
+that stops identical tool name + arguments + output loops after three repeats.
 
 The key type is provider-neutral model-visible history:
 
@@ -496,9 +505,9 @@ The first cases document the runtime contract:
 - text delta without `assistant_message_done`: protocol error
 - tool-call argument delta without `tool_call_committed`: protocol error
 
-## Phase 17: Workspace Read Tools v1
+## Phase 17: Built-In Read-Only Tools v1
 
-The first real agent tool foundation is read-only workspace exploration rather
+The first real agent tool foundation is read-only local file exploration rather
 than shell execution. This keeps the learning project close to production agent
 needs while postponing OS process sandboxing and approval complexity.
 
@@ -512,7 +521,7 @@ read    read UTF-8 text files with line pagination
 ```
 
 Each tool is marked read-only, non-destructive, closed-world, idempotent, and
-parallel-capable. Paths are resolved under the current workspace root and
+parallel-capable. Paths are resolved under the current project root and
 checked with `realpath`, so both lexical escapes such as `../package.json` and
 symlink escapes fail as ordinary tool errors. Those errors become
 `function_call_output` records with `isError: true`, so the model can retry with
@@ -530,7 +539,7 @@ rather than unbounded raw dumps:
 
 The tests now cover both direct tool runtime behavior and sampling-loop
 integration. The integration test has the fake model request `read`, verifies
-the real workspace tool runs through the permission/runtime boundary, and
+the real built-in tool runs through the permission/runtime boundary, and
 asserts the ordered `function_call_output` history item.
 
 ## Phase 18: Tool Result Contract v1
@@ -575,7 +584,7 @@ implemented yet.
 
 ## Phase 19: OpenAI Strict Tool Schema Adapter
 
-The first browser run with workspace tools exposed an OpenAI strict-schema
+The first browser run with built-in tools exposed an OpenAI strict-schema
 constraint: with `strict: true`, OpenAI requires every property in a tool schema
 to be listed in `required`, and optional fields must be represented by allowing
 `null`.
@@ -596,9 +605,141 @@ OpenAI strict parameters:
   limit.type = ['number', 'null']
 ```
 
-The workspace tool Zod parsers also accept strict-mode `null` for optional
+The built-in tool Zod parsers also accept strict-mode `null` for optional
 arguments and normalize it to `undefined`, so model calls that follow the
 OpenAI schema do not fail at the runtime validation boundary.
+
+## Phase 20: Frontend Debug Console v1
+
+The React workbench now has an agent Debug Console focused on validating the
+runtime rather than presenting a polished chat UI.
+
+The backend stream projection exposes runtime internals as `debug` SSE events:
+
+```text
+model_requested         -> debug.modelRequested
+model_completed         -> debug.modelCompleted
+tool_requested          -> debug.toolRequested
+tool_started            -> debug.toolStarted
+tool_finished           -> debug.toolFinished
+tool_permission_decided -> debug.toolPermissionDecided
+approval_requested      -> debug.approvalRequested
+```
+
+`debug.historyCommitted` is emitted on a separate stream-only debug channel,
+not as a persisted `AgentEvent`. JSONL already stores committed context as
+`response_item` records, so the Debug Console can show the same commit boundary
+without duplicating resume state inside `agent_event`.
+
+Each sampling round emits the provider-neutral model request before it enters
+the model gateway, including:
+
+- model id
+- wire API
+- messages/history sent to the model
+- tools exposed to the model
+- tool choice
+- temperature
+
+Each sampling round also emits the provider-neutral model output after the
+stream finishes, including:
+
+- streamed assistant text
+- committed assistant messages
+- completed tool calls
+- usage/raw usage
+
+Tool cards show the tool call id, tool name, arguments, status,
+model-visible `modelOutput`, and internal structured details. The final run
+also shows normalized usage, including cached token values as `null` when the
+provider did not report them.
+
+History commits show the provider-neutral `AgentResponseItem[]` written into
+model-visible history. This is the layer that carries
+`runtimeRole: "working_message" | "final_response"`, so Debug can distinguish
+model-call completion from agent-level final answer commitment.
+
+This keeps the browser as an observer. It can inspect every important runtime
+boundary, but the server remains responsible for model calls, tool execution,
+session writes, and cancellation.
+
+## Phase 21: Agent, Debug, and Session Pages
+
+The frontend now renders the same run through three separate pages:
+
+- Agent page: reads like a transcript. It chains each completed model round's
+  assistant text with the tool calls requested by that model output, without
+  exposing runtime terms such as "round" to the user. Tool calls from the same
+  model output are grouped into one collapsible batch. Assistant text is
+  rendered as Markdown with GFM support, so lists, tables, and code blocks match
+  the format models normally produce.
+- Debug page: keeps the full inspection surface. It shows every model request,
+  model output, history commit, tool lifecycle event, model-visible tool output,
+  internal tool details, and usage payload without truncating summary values.
+- Session page: loads the current run's persisted JSONL through
+  `/api/agent/sessions/[id]` and prints one raw JSON record per line. This is
+  the session/replay artifact view, not another debug projection.
+
+The page split itself is a frontend projection. The Debug page also consumes the
+stream-only `debug.historyCommitted` event so it can show the exact response
+items that entered model-visible history without adding duplicate state to the
+JSONL session event log.
+
+`AgentStep` remains available, but it is collapsed on the Agent page because it
+is now a summary layer. The runtime truth remains the provider-neutral model
+rounds, tool requests, tool outputs, and response-item history.
+
+## Phase 22: Tool Runtime Boundary v1
+
+The tool layer now has an explicit runtime contract before adding write/edit,
+shell, MCP, or hosted tools.
+
+`lib/agent-tool-contracts.ts` defines the provider-neutral tool definition:
+
+```text
+source        builtin | dynamic | mcp | hosted
+group         utility_builtins | read_only_builtins | editing_builtins | shell_builtins
+category      utility | read | search | write | shell
+annotations   readOnly / destructive / openWorld / idempotent facts
+execution     executionMode, timeoutMs, abortable
+pathAccess    none | current_project | allowed_roots | danger_full_access
+modelTool     name, description, inputSchema, schemaStrict
+execute       concrete handler
+```
+
+`lib/agent-tools.ts` composes groups instead of flattening every tool by hand:
+
+```text
+utility_builtins    empty skeleton
+read_only_builtins  read, grep, find, ls
+editing_builtins    empty skeleton
+shell_builtins      empty skeleton
+```
+
+The original text-counting toy tool was removed after the read-only built-ins
+landed. The frontend demo now exercises project exploration with
+`ls/find/grep/read` instead of text counting.
+
+The OpenAI Chat Completions and Responses dialects still receive only
+`modelTool`. Runtime metadata such as source, group, path policy, annotations,
+execution mode, timeout, and abortability stays inside the agent runtime. This
+keeps the future Anthropic/MCP/provider adapters from depending on OpenAI-shaped
+tool objects.
+
+`lib/agent-path-policy.ts` separates path access from concrete tools:
+
+```text
+none
+current_project
+allowed_roots
+danger_full_access
+```
+
+Current read-only built-ins still use `current_project`; behavior is unchanged.
+The new `allowed_roots` and `danger_full_access` policies are contract-tested
+but not activated by default. This gives write/edit and shell a place to attach
+their filesystem semantics later without burying permission decisions inside a
+single large tool file.
 
 ## Deferred Work
 

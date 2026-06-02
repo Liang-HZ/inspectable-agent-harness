@@ -1,6 +1,13 @@
 import type { AgentResult, AgentStep, AgentUsage } from './agent-api-types';
 import type { AgentModelStage } from './agent-model-stages';
 import type {
+  AgentModelAssistantMessage,
+  AgentModelRequest,
+  AgentModelToolCall,
+  AgentModelUsageSnapshot,
+  AgentModelWireApi,
+} from './agent-model-types';
+import type {
   AgentPermissionDecision,
   AgentPermissionRequest,
 } from './agent-permissions';
@@ -34,6 +41,22 @@ export type AgentEvent =
       stage: AgentModelStage;
     }
   | {
+      type: 'model_requested';
+      round: number;
+      model: string;
+      wireApi: AgentModelWireApi;
+      request: AgentModelRequest;
+    }
+  | {
+      type: 'model_completed';
+      round: number;
+      model: string;
+      streamedAssistantText: string;
+      assistantMessages: AgentModelAssistantMessage[];
+      toolCalls: AgentModelToolCall[];
+      usage: AgentModelUsageSnapshot;
+    }
+  | {
       type: 'assistant_delta';
       delta: string;
     }
@@ -53,6 +76,7 @@ export type AgentEvent =
       toolName: string;
       input: unknown;
       result: unknown;
+      modelOutput: string;
       isError: boolean;
     }
   | {
@@ -131,6 +155,23 @@ export function applyAgentEvent(
         event.stage === 'answer_generation'
           ? 'streaming_assistant'
           : 'waiting_for_model',
+      events: events,
+    };
+  }
+
+  if (event.type === 'model_requested') {
+    return {
+      ...state,
+      status: 'waiting_for_model',
+      events: events,
+    };
+  }
+
+  if (event.type === 'model_completed') {
+    return {
+      ...state,
+      status:
+        event.toolCalls.length > 0 ? 'running_tool' : 'streaming_assistant',
       events: events,
     };
   }

@@ -1,6 +1,15 @@
 import * as z from 'zod';
 
 import { AGENT_MODEL_STAGES } from './agent-model-stages';
+import type { AgentModelStage } from './agent-model-stages';
+import type {
+  AgentModelAssistantMessage,
+  AgentModelRequest,
+  AgentModelToolCall,
+  AgentModelUsageSnapshot,
+  AgentModelWireApi,
+} from './agent-model-types';
+import type { AgentResponseItem } from './agent-response-items';
 
 export type AgentRequestBody = {
   task: string;
@@ -54,6 +63,75 @@ export const agentResultSchema = z.strictObject({
 
 export type AgentResult = z.infer<typeof agentResultSchema>;
 
+export type AgentToolDebugRequest = {
+  toolCallId: string;
+  toolName: string;
+  argumentsJson: string;
+};
+
+export type AgentDebugStreamEvent =
+  | {
+      type: 'runStarted';
+      runId: string;
+    }
+  | {
+      type: 'modelStarted';
+      stage: AgentModelStage;
+    }
+  | {
+      type: 'modelRequested';
+      round: number;
+      model: string;
+      wireApi: AgentModelWireApi;
+      request: AgentModelRequest;
+    }
+  | {
+      type: 'modelCompleted';
+      round: number;
+      model: string;
+      streamedAssistantText: string;
+      assistantMessages: AgentModelAssistantMessage[];
+      toolCalls: AgentModelToolCall[];
+      usage: AgentModelUsageSnapshot;
+    }
+  | {
+      type: 'historyCommitted';
+      items: AgentResponseItem[];
+    }
+  | {
+      type: 'toolRequested';
+      toolRequests: AgentToolDebugRequest[];
+    }
+  | {
+      type: 'toolStarted';
+      toolCallId: string;
+      toolName: string;
+      argumentsJson: string;
+    }
+  | {
+      type: 'toolFinished';
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      result: unknown;
+      modelOutput: string;
+      isError: boolean;
+    }
+  | {
+      type: 'toolPermissionDecided';
+      request: unknown;
+      decision: unknown;
+    }
+  | {
+      type: 'approvalRequested';
+      request: unknown;
+      decision: unknown;
+    }
+  | {
+      type: 'runCancelled';
+      reason: string;
+    };
+
 export type AgentStreamEvent =
   | {
       type: 'step';
@@ -62,6 +140,10 @@ export type AgentStreamEvent =
   | {
       type: 'assistantDelta';
       delta: string;
+    }
+  | {
+      type: 'debug';
+      event: AgentDebugStreamEvent;
     }
   | {
       type: 'done';

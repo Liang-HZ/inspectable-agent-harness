@@ -1,10 +1,12 @@
 import type {
   AgentModelCallUsage,
+  AgentDebugStreamEvent,
   AgentResult,
   AgentStep,
 } from './agent-api-types';
 import type {
   AgentModelAssistantMessage,
+  AgentModelRequest,
   AgentModelToolCall,
   AgentModelUsageSnapshot,
 } from './agent-model-types';
@@ -31,11 +33,13 @@ import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
 import { executeAgentToolBatch } from './agent-tool-scheduler';
 import { agentTools } from './agent-tools';
 import type { AgentToolExecution, AgentToolExecutionMode } from './agent-tools';
+import type { AgentToolBatchExecution } from './agent-tool-scheduler';
 import type { ModelConfig } from './env';
 import {
   createAgentModelGateway,
   type AgentModelGateway,
 } from './model-gateway';
+import { AgentToolFatalError } from './agent-tool-output';
 import { createAgentModelCallUsage, createAgentUsage } from './agent-usage';
 import {
   createCommittedAssistantMessageItems,
@@ -46,6 +50,7 @@ import {
 
 type RunAgentStreamCallbacks = {
   onEvent: (event: AgentEvent) => void;
+  onDebugEvent: (event: AgentDebugStreamEvent) => void;
 };
 
 type SamplingLoopResult = {
@@ -65,8 +70,17 @@ type SamplingRoundResult = {
 };
 
 const AGENT_SYSTEM_MESSAGE =
-  'You are an inspectable tool-using agent. Decide whether the task needs a local tool. Use ls/find/grep/read for workspace exploration: find file paths before reading, grep for text or symbols, and read exact files with pagination. Use inspect_text only for direct text counts, length checks, line counts, or basic text statistics. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
-const MAX_AGENT_ROUNDS = 5;
+  'You are an inspectable coding agent. Decide whether the task needs local project exploration. Use ls/find/grep/read for local file exploration: list directories to orient yourself, find file paths before reading, grep for text or symbols, and read exact files with pagination. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
+const REPEATED_TOOL_CALL_LIMIT = 3;
+
+type ToolLoopGuardEntry = {
+  repeatedCount: number;
+  lastModelOutput: string;
+};
+
+type ToolLoopGuard = {
+  entries: Map<string, ToolLoopGuardEntry>;
+};
 
 function buildAgentPrompt(input: AgentInput): string {
   const sections = [
@@ -188,10 +202,103 @@ function createToolOutputItem(
   };
 }
 
+function createToolLoopGuard(): ToolLoopGuard {
+  return {
+    entries: new Map<string, ToolLoopGuardEntry>(),
+  };
+}
+
+function stableStringifyJsonValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringifyJsonValue(item)).join(',')}]`;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sortedEntries = Object.keys(record)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${stableStringifyJsonValue(record[key])}`,
+      );
+
+    return `{${sortedEntries.join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function normalizeToolArgumentsForLoopGuard(argumentsJson: string): string {
+  const trimmedArguments = argumentsJson.trim();
+
+  try {
+    return stableStringifyJsonValue(JSON.parse(trimmedArguments));
+  } catch {
+    return trimmedArguments;
+  }
+}
+
+function createToolLoopGuardSignature(toolCall: AgentModelToolCall): string {
+  return `${toolCall.name}\n${normalizeToolArgumentsForLoopGuard(
+    toolCall.argumentsJson,
+  )}`;
+}
+
+function detectRepeatedToolCallLoop(
+  toolCalls: AgentModelToolCall[],
+  toolBatch: AgentToolBatchExecution,
+  loopGuard: ToolLoopGuard,
+): AgentToolFatalError | undefined {
+  const executionsByCallId = new Map<string, AgentToolExecution>(
+    toolBatch.toolExecutions.map((execution) => [
+      execution.toolCallId,
+      execution,
+    ]),
+  );
+
+  for (const toolCall of toolCalls) {
+    const execution = executionsByCallId.get(toolCall.id);
+
+    if (execution === undefined) {
+      throw new Error(
+        `Tool execution missing for committed tool call: ${toolCall.id}.`,
+      );
+    }
+
+    const signature = createToolLoopGuardSignature(toolCall);
+    const previousEntry = loopGuard.entries.get(signature);
+    const repeatedCount =
+      previousEntry !== undefined &&
+      previousEntry.lastModelOutput === execution.modelOutput
+        ? previousEntry.repeatedCount + 1
+        : 1;
+
+    loopGuard.entries.set(signature, {
+      repeatedCount: repeatedCount,
+      lastModelOutput: execution.modelOutput,
+    });
+
+    if (repeatedCount > REPEATED_TOOL_CALL_LIMIT) {
+      return new AgentToolFatalError(
+        'REPEATED_TOOL_CALL',
+        `The model requested the same \`${toolCall.name}\` tool call with the same result more than ${REPEATED_TOOL_CALL_LIMIT} times. This looks like a tool-use loop; stop the run and ask the user or change the tool arguments.`,
+        {
+          toolName: toolCall.name,
+          argumentsJson: toolCall.argumentsJson,
+          repeatedCount: repeatedCount,
+        },
+      );
+    }
+  }
+
+  return undefined;
+}
+
 function appendResponseItems(
   history: AgentResponseItem[],
   items: AgentResponseItem[],
   session: AgentSession | undefined,
+  onCommitted: ((items: AgentResponseItem[]) => void) | undefined,
 ): void {
   for (const item of items) {
     history.push(item);
@@ -199,6 +306,10 @@ function appendResponseItems(
     if (session !== undefined) {
       appendAgentResponseItem(session, item);
     }
+  }
+
+  if (items.length > 0) {
+    onCommitted?.(items);
   }
 }
 
@@ -243,14 +354,25 @@ async function runSamplingRound(
   input: AgentInput,
   context: AgentRunContext,
   history: AgentResponseItem[],
+  round: number,
   emitAgentEvent: ((event: AgentEvent) => void) | undefined,
 ): Promise<SamplingRoundResult> {
-  const stream = await modelGateway.streamResponse({
+  const request: AgentModelRequest = {
     messages: responseItemsToModelMessages(history),
     tools: agentTools,
     toolChoice: 'auto',
     temperature: input.temperature,
+  };
+
+  emitAgentEvent?.({
+    type: 'model_requested',
+    round: round,
+    model: modelGateway.model,
+    wireApi: modelGateway.wireApi,
+    request: request,
   });
+
+  const stream = await modelGateway.streamResponse(request);
 
   let streamedAssistantText = '';
   let model = modelGateway.model;
@@ -316,10 +438,18 @@ export async function runSamplingLoop(
   modelCallUsages: AgentModelCallUsage[],
   session: AgentSession | undefined,
   emitAgentEvent: ((event: AgentEvent) => void) | undefined,
+  emitDebugEvent: ((event: AgentDebugStreamEvent) => void) | undefined,
 ): Promise<SamplingLoopResult> {
   let usedTool = false;
+  const loopGuard = createToolLoopGuard();
+  const emitHistoryCommittedDebugEvent = (items: AgentResponseItem[]) => {
+    emitDebugEvent?.({
+      type: 'historyCommitted',
+      items: items,
+    });
+  };
 
-  for (let round = 1; round <= MAX_AGENT_ROUNDS; round += 1) {
+  for (let round = 1; ; round += 1) {
     assertAgentRunNotAborted(context);
     emitAgentEvent?.({
       type: 'model_started',
@@ -331,8 +461,18 @@ export async function runSamplingLoop(
       input,
       context,
       history,
+      round,
       emitAgentEvent,
     );
+    emitAgentEvent?.({
+      type: 'model_completed',
+      round: round,
+      model: roundResult.model,
+      streamedAssistantText: roundResult.streamedAssistantText,
+      assistantMessages: roundResult.assistantMessages,
+      toolCalls: roundResult.toolCalls,
+      usage: roundResult.usage,
+    });
     assertNoIncompleteToolCall(roundResult);
     assertCommittedAssistantMessage(roundResult);
 
@@ -354,6 +494,7 @@ export async function runSamplingLoop(
           'final_response',
         ),
         session,
+        emitHistoryCommittedDebugEvent,
       );
 
       return {
@@ -380,6 +521,7 @@ export async function runSamplingLoop(
         }),
       ],
       session,
+      emitHistoryCommittedDebugEvent,
     );
 
     const toolBatch = await executeAgentToolBatch(
@@ -388,6 +530,11 @@ export async function runSamplingLoop(
       {
         onEvent: emitAgentEvent,
       },
+    );
+    const repeatedToolCallLoopError = detectRepeatedToolCallLoop(
+      roundResult.toolCalls,
+      toolBatch,
+      loopGuard,
     );
     const toolStep = createToolStep(
       roundResult.toolCalls,
@@ -409,10 +556,13 @@ export async function runSamplingLoop(
         createToolOutputItem(execution),
       ),
       session,
+      emitHistoryCommittedDebugEvent,
     );
-  }
 
-  throw new Error(`Agent exceeded maximum tool rounds: ${MAX_AGENT_ROUNDS}.`);
+    if (repeatedToolCallLoopError !== undefined) {
+      throw repeatedToolCallLoopError;
+    }
+  }
 }
 
 export async function runAgent(
@@ -443,6 +593,7 @@ export async function runAgent(
     history,
     steps,
     modelCallUsages,
+    undefined,
     undefined,
     undefined,
   );
@@ -541,6 +692,7 @@ export async function runAgentStream(
     modelCallUsages,
     session,
     emitAgentEvent,
+    callbacks.onDebugEvent,
   );
   const finalStep = createFinalAnswerStep(
     samplingResult.model,
