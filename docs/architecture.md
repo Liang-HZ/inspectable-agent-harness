@@ -884,14 +884,23 @@ Current implementation status:
 - The default is `approvalPolicy=on_request` and `sandboxMode=read_only`.
 - `AgentToolRuntime` creates an `AgentPermissionRequest` before executing a
   tool.
-- `decideAgentToolPermission(...)` currently uses approval policy plus tool
-  annotations.
+- The request includes declared tool metadata, the effective path policy for
+  the current sandbox mode, and any model-supplied path argument that the tool
+  declares as permission-relevant.
+- `decideAgentToolPermission(...)` checks path policy before approval policy,
+  so `approvalPolicy=never` cannot bypass filesystem boundaries.
 - Known-safe tools are allowed.
+- Project-outside paths are denied before tool execution and returned to the
+  model as recoverable tool errors.
 - Unknown, destructive, or open-world tools ask for approval.
 - Interactive approval resume is not implemented yet, so an `ask` decision emits
   `approval_requested` and then raises `AgentApprovalRequiredError` as a
   fail-closed placeholder.
-- Sandbox mode is declared but not enforced yet.
+- Sandbox mode is not an OS sandbox yet, but it now determines the effective
+  path access policy for filesystem tools. `danger_full_access` widens
+  path-declaring tools to absolute filesystem access, while `read_only` and
+  `workspace_write` keep the current project boundary for the active read-only
+  built-ins.
 
 `danger_full_access` is a path/sandbox policy mode, not a fact that a tool can
 claim for itself. It should be selected by the user, app, or run configuration,
@@ -914,6 +923,12 @@ Every decision should remain auditable through event logs. Current decisions use
 `AgentApprovalRequiredError` is not the final approval design. It only marks the
 current unsupported pause point until the runtime has session storage, approval
 responses, and resume support.
+
+Path denials are not approval pauses. They are terminal for that tool call but
+recoverable for the agent loop: the runtime emits `tool_permission_decided`
+with `decision.type="deny"`, skips `tool_started`, writes a model-visible tool
+error such as `Error [PATH_OUTSIDE_ALLOWED_ROOT]: ...`, and lets the model
+continue from that observation.
 
 ### Approval Pause Semantics
 

@@ -4,7 +4,13 @@ import type {
   AgentToolGroupName,
   AgentToolSource,
 } from './agent-tool-contracts';
-import type { AgentToolPathAccessPolicy } from './agent-path-policy';
+import {
+  currentProjectPathAccessPolicy,
+  dangerFullAccessPathAccessPolicy,
+  decideAgentToolPathAccess,
+  type AgentToolPathAccessPolicy,
+} from './agent-path-policy';
+import type { AgentToolErrorCode } from './agent-tool-output';
 
 export type AgentToolAnnotations = {
   readOnly?: boolean;
@@ -41,7 +47,10 @@ export type AgentPermissionRequest = {
   source: AgentToolSource;
   group: AgentToolGroupName;
   category: AgentToolCategory;
+  declaredPathAccess: AgentToolPathAccessPolicy;
   pathAccess: AgentToolPathAccessPolicy;
+  pathArgumentName: string | undefined;
+  requestedPath: string | undefined;
   executionMode: AgentToolExecutionMode;
   approvalPolicy: AgentApprovalPolicy;
   sandboxMode: AgentSandboxMode;
@@ -61,6 +70,7 @@ export type AgentPermissionDecision =
   | {
       type: 'deny';
       source: AgentPermissionDecisionSource;
+      errorCode: AgentToolErrorCode;
       reason: string;
     };
 
@@ -125,9 +135,58 @@ function hasKnownRiskyAnnotations(annotations: AgentToolAnnotations): boolean {
   return annotations.destructive === true || annotations.openWorld === true;
 }
 
+export function resolveAgentPathAccessForRunPolicy(
+  declaredPathAccess: AgentToolPathAccessPolicy,
+  sandboxMode: AgentSandboxMode,
+): AgentToolPathAccessPolicy {
+  if (declaredPathAccess.type === 'none') {
+    return declaredPathAccess;
+  }
+
+  if (sandboxMode === 'danger_full_access') {
+    return dangerFullAccessPathAccessPolicy;
+  }
+
+  if (declaredPathAccess.type === 'danger_full_access') {
+    return currentProjectPathAccessPolicy;
+  }
+
+  return declaredPathAccess;
+}
+
+function decideRequestedPathAccess(
+  request: AgentPermissionRequest,
+): AgentPermissionDecision | undefined {
+  if (request.pathArgumentName === undefined) {
+    return undefined;
+  }
+
+  const pathDecision = decideAgentToolPathAccess(
+    request.requestedPath,
+    request.pathAccess,
+  );
+
+  if (pathDecision.type === 'allow') {
+    return undefined;
+  }
+
+  return {
+    type: 'deny',
+    source: 'policy',
+    errorCode: pathDecision.code,
+    reason: pathDecision.reason,
+  };
+}
+
 export function decideAgentToolPermission(
   request: AgentPermissionRequest,
 ): AgentPermissionDecision {
+  const pathDecision = decideRequestedPathAccess(request);
+
+  if (pathDecision !== undefined) {
+    return pathDecision;
+  }
+
   if (request.approvalPolicy === 'never') {
     return {
       type: 'allow',

@@ -2,8 +2,8 @@ import type { AgentModelToolCall } from './agent-model-types';
 import type { AgentEvent } from './agent-events';
 import {
   AgentApprovalRequiredError,
-  AgentPermissionDeniedError,
   decideAgentToolPermission,
+  resolveAgentPathAccessForRunPolicy,
   type AgentPermissionDecision,
   type AgentPermissionRequest,
 } from './agent-permissions';
@@ -65,6 +65,12 @@ function createPermissionRequest(
   toolDefinition: AgentToolDefinition,
   context: AgentRunContext,
 ): AgentPermissionRequest {
+  const pathArgumentName = toolDefinition.permissionInput?.pathArgumentName;
+  const pathAccess = resolveAgentPathAccessForRunPolicy(
+    toolDefinition.pathAccess,
+    context.policy.sandboxMode,
+  );
+
   return {
     toolCallId: toolCall.id,
     toolName: toolDefinition.name,
@@ -73,11 +79,42 @@ function createPermissionRequest(
     source: toolDefinition.source,
     group: toolDefinition.group,
     category: toolDefinition.category,
-    pathAccess: toolDefinition.pathAccess,
+    declaredPathAccess: toolDefinition.pathAccess,
+    pathAccess: pathAccess,
+    pathArgumentName: pathArgumentName,
+    requestedPath: readPermissionPathArgument(toolCall, pathArgumentName),
     executionMode: toolDefinition.executionMode,
     approvalPolicy: context.policy.approvalPolicy,
     sandboxMode: context.policy.sandboxMode,
   };
+}
+
+function readPermissionPathArgument(
+  toolCall: AgentModelToolCall,
+  pathArgumentName: string | undefined,
+): string | undefined {
+  if (pathArgumentName === undefined) {
+    return undefined;
+  }
+
+  let parsedArguments: unknown;
+  try {
+    parsedArguments = JSON.parse(toolCall.argumentsJson);
+  } catch {
+    return undefined;
+  }
+
+  if (
+    typeof parsedArguments !== 'object' ||
+    parsedArguments === null ||
+    Array.isArray(parsedArguments)
+  ) {
+    return undefined;
+  }
+
+  const value = (parsedArguments as Record<string, unknown>)[pathArgumentName];
+
+  return typeof value === 'string' ? value : undefined;
 }
 
 function createToolPermissionDecidedEvent(
@@ -120,14 +157,10 @@ function createErroredToolExecution(
   };
 }
 
-function assertToolPermissionCanContinue(
+function assertToolApprovalCanContinue(
   request: AgentPermissionRequest,
   decision: AgentPermissionDecision,
 ): void {
-  if (decision.type === 'deny') {
-    throw new AgentPermissionDeniedError(request, decision);
-  }
-
   if (decision.type === 'ask') {
     throw new AgentApprovalRequiredError(request, decision);
   }
@@ -208,6 +241,12 @@ async function executeToolWithRuntimeLimits(
       toolDefinition.execute(
         toolCall.argumentsJson,
         toolAbortController.signal,
+        {
+          pathAccess: resolveAgentPathAccessForRunPolicy(
+            toolDefinition.pathAccess,
+            context.policy.sandboxMode,
+          ),
+        },
       ),
     ).then(settleWithResult, settleWithError);
   });
@@ -272,7 +311,21 @@ export async function executeAgentToolCall(
     );
   }
 
-  assertToolPermissionCanContinue(permissionRequest, permissionDecision);
+  if (permissionDecision.type === 'deny') {
+    const execution = createErroredToolExecution(
+      toolCall,
+      createRespondToModelToolOutput(
+        permissionDecision.errorCode,
+        permissionDecision.reason,
+      ),
+      Date.now() - startedAt,
+    );
+    callbacks.onEvent?.(createToolFinishedEvent(execution));
+
+    return execution;
+  }
+
+  assertToolApprovalCanContinue(permissionRequest, permissionDecision);
   assertAgentRunNotAborted(context);
   callbacks.onEvent?.(createToolStartedEvent(toolCall));
 

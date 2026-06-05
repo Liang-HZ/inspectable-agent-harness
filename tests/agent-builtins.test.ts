@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 
 import type { AgentEvent } from '../lib/agent-events';
 import type { AgentModelToolCall } from '../lib/agent-model-types';
+import { AgentApprovalRequiredError } from '../lib/agent-permissions';
 import { createAgentRunContext } from '../lib/agent-run-context';
 import { executeAgentToolCall } from '../lib/agent-tool-runtime';
 import type { AgentToolDefinition } from '../lib/agent-tools';
@@ -70,6 +74,153 @@ test('read rejects paths outside the current allowed root as a tool error', asyn
   assert.equal(execution.output.type, 'respond_to_model');
   assert.equal(execution.output.error.code, 'PATH_OUTSIDE_ALLOWED_ROOT');
   assert.match(execution.modelOutput, /^Error \[PATH_OUTSIDE_ALLOWED_ROOT\]:/);
+});
+
+test('read denies outside paths before tool execution under default policy', async () => {
+  const events: AgentEvent[] = [];
+  const execution = await executeAgentToolCall(
+    createToolCall('read', {
+      path: '../package.json',
+    }),
+    createAgentRunContext({ runId: 'test-permission-path-deny' }),
+    {
+      onEvent: (event) => events.push(event),
+    },
+  );
+  const permissionEvent = events.find(
+    (event) => event.type === 'tool_permission_decided',
+  );
+
+  assert.equal(execution.isError, true);
+  assert.equal(execution.output.type, 'respond_to_model');
+  assert.equal(execution.output.error.code, 'PATH_OUTSIDE_ALLOWED_ROOT');
+  assert.notEqual(permissionEvent, undefined);
+  if (permissionEvent?.type !== 'tool_permission_decided') {
+    throw new Error('Expected tool_permission_decided event.');
+  }
+  assert.equal(permissionEvent.decision.type, 'deny');
+  assert.equal(permissionEvent.request.requestedPath, '../package.json');
+  assert.equal(
+    events.some((event) => event.type === 'tool_started'),
+    false,
+  );
+});
+
+test('approval policy never does not bypass path permission denial', async () => {
+  const events: AgentEvent[] = [];
+  const execution = await executeAgentToolCall(
+    createToolCall('read', {
+      path: '../package.json',
+    }),
+    createAgentRunContext({
+      runId: 'test-never-still-denies-path',
+      policy: {
+        approvalPolicy: 'never',
+        sandboxMode: 'read_only',
+      },
+    }),
+    {
+      onEvent: (event) => events.push(event),
+    },
+  );
+  const permissionEvent = events.find(
+    (event) => event.type === 'tool_permission_decided',
+  );
+
+  assert.equal(execution.isError, true);
+  assert.equal(execution.output.type, 'respond_to_model');
+  assert.equal(execution.output.error.code, 'PATH_OUTSIDE_ALLOWED_ROOT');
+  assert.notEqual(permissionEvent, undefined);
+  if (permissionEvent?.type !== 'tool_permission_decided') {
+    throw new Error('Expected tool_permission_decided event.');
+  }
+  assert.equal(permissionEvent.decision.type, 'deny');
+});
+
+test('danger full access read can access paths outside the project root', async () => {
+  const tempDirectory = await mkdtemp(
+    path.join(tmpdir(), 'agent-danger-full-access-'),
+  );
+  const outsideFile = path.join(tempDirectory, 'outside.txt');
+  const events: AgentEvent[] = [];
+
+  try {
+    await writeFile(outsideFile, 'outside access works\n', 'utf8');
+
+    const execution = await executeAgentToolCall(
+      createToolCall('read', {
+        path: outsideFile,
+      }),
+      createAgentRunContext({
+        runId: 'test-danger-full-access-read',
+        policy: {
+          approvalPolicy: 'on_request',
+          sandboxMode: 'danger_full_access',
+        },
+      }),
+      {
+        onEvent: (event) => events.push(event),
+      },
+    );
+    const permissionEvent = events.find(
+      (event) => event.type === 'tool_permission_decided',
+    );
+
+    assert.equal(execution.isError, false);
+    assert.match(execution.modelOutput, /outside access works/);
+    assert.notEqual(permissionEvent, undefined);
+    if (permissionEvent?.type !== 'tool_permission_decided') {
+      throw new Error('Expected tool_permission_decided event.');
+    }
+    assert.equal(permissionEvent.decision.type, 'allow');
+    assert.equal(permissionEvent.request.pathAccess.type, 'danger_full_access');
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('risky tools request approval and fail closed until approval resume exists', async () => {
+  const events: AgentEvent[] = [];
+  const toolDefinition = createRiskyToolDefinition('test_risky_tool');
+  agentToolRegistry.set(toolDefinition.name, toolDefinition);
+
+  try {
+    await assert.rejects(
+      () =>
+        executeAgentToolCall(
+          {
+            id: 'call-risky',
+            name: toolDefinition.name,
+            argumentsJson: '{}',
+          },
+          createAgentRunContext({ runId: 'test-risky-tool-approval' }),
+          {
+            onEvent: (event) => events.push(event),
+          },
+        ),
+      AgentApprovalRequiredError,
+    );
+
+    const permissionEvent = events.find(
+      (event) => event.type === 'tool_permission_decided',
+    );
+    const approvalEvent = events.find(
+      (event) => event.type === 'approval_requested',
+    );
+
+    assert.notEqual(permissionEvent, undefined);
+    if (permissionEvent?.type !== 'tool_permission_decided') {
+      throw new Error('Expected tool_permission_decided event.');
+    }
+    assert.equal(permissionEvent.decision.type, 'ask');
+    assert.notEqual(approvalEvent, undefined);
+    assert.equal(
+      events.some((event) => event.type === 'tool_started'),
+      false,
+    );
+  } finally {
+    agentToolRegistry.delete(toolDefinition.name);
+  }
 });
 
 test('read reports pagination notice when output is line-limited', async () => {
@@ -300,6 +451,45 @@ function createSlowToolDefinition(
         output: {
           type: 'success',
           contentText: 'slow tool completed',
+        },
+      };
+    },
+  };
+}
+
+function createRiskyToolDefinition(name: string): AgentToolDefinition {
+  return {
+    name: name,
+    source: 'builtin',
+    group: 'editing_builtins',
+    category: 'write',
+    annotations: {
+      readOnly: false,
+      destructive: true,
+      openWorld: false,
+      idempotent: false,
+    },
+    executionMode: 'sequential',
+    timeoutMs: 10_000,
+    abortable: true,
+    pathAccess: noPathAccessPolicy,
+    modelTool: {
+      name: name,
+      description: 'Test-only risky tool.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      schemaStrict: true,
+    },
+    execute: () => {
+      return {
+        input: {},
+        output: {
+          type: 'success',
+          contentText: 'should not execute',
         },
       };
     },

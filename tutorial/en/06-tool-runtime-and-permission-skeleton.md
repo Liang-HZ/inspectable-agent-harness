@@ -67,8 +67,22 @@ It models:
 Current decisions are intentionally small:
 
 - safe read-only built-ins can run
+- path-denied tool calls fail before execution and become model-visible tool
+  errors
 - approval-required paths fail closed
 - interactive approval resume is deferred
+
+The permission request now carries both static tool facts and per-call data:
+
+```text
+declaredPathAccess
+effective pathAccess for the current sandboxMode
+requestedPath from the tool arguments
+```
+
+That means `sandboxMode=danger_full_access` can widen read-only file tools to
+absolute paths, while the default `read_only` mode keeps them inside the current
+project.
 
 ## Why Tool Facts Are Separate From Policy
 
@@ -133,6 +147,10 @@ error formatting, and events. Runtime boundaries are not only for risky tools.
 
 Tools should report facts: what path they access, whether they write, whether
 they need network. Whether execution is allowed belongs to policy.
+
+The read-only tools still perform a `realpath` guard inside the handler. That is
+not a replacement for permission policy; it is a second safety check that catches
+symlink escapes after the pre-execution decision.
 
 ### Misunderstanding 3: Shell Should Come First Because It Is Faster
 

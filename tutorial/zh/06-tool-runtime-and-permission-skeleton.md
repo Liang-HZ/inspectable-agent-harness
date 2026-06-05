@@ -63,8 +63,19 @@ lib/agent-permissions.ts
 当前决策有意保持很小：
 
 - safe read-only built-ins 可以运行
+- path-denied tool call 会在执行前失败，并变成模型可见 tool error
 - approval-required path fail closed
 - interactive approval resume deferred
+
+Permission request 现在同时携带静态 tool facts 和单次调用数据：
+
+```text
+declaredPathAccess
+current sandboxMode 对应的 effective pathAccess
+tool arguments 里的 requestedPath
+```
+
+这意味着 `sandboxMode=danger_full_access` 可以把只读文件工具扩展到绝对路径；默认 `read_only` 模式仍然把它们限制在当前项目内。
 
 ## 为什么 tool facts 和 policy 分开
 
@@ -124,6 +135,8 @@ cdd881c Add agent permission policy skeleton
 ### 误解二：permission policy 应该写在工具内部
 
 工具内部应该描述事实，例如访问什么路径、是否写入、是否需要网络。是否允许执行应该由 policy 层决定。
+
+只读工具内部仍然保留 `realpath` guard。它不是 permission policy 的替代品，而是第二道安全检查，用来挡住 permission pre-check 之后可能出现的 symlink 逃逸。
 
 ### 误解三：先做 shell 更快
 

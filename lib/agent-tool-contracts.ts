@@ -22,6 +22,10 @@ export type AgentToolGroupName =
 
 export type AgentToolExecutionMode = 'sequential' | 'parallel';
 
+export type AgentToolPermissionInput = {
+  pathArgumentName?: string;
+};
+
 export type AgentToolResult = {
   input: unknown;
   output: AgentToolOutput;
@@ -37,11 +41,17 @@ export type AgentToolDefinition = {
   timeoutMs: number;
   abortable: boolean;
   pathAccess: AgentToolPathAccessPolicy;
+  permissionInput?: AgentToolPermissionInput;
   modelTool: AgentModelToolDefinition;
   execute: (
     argumentsJson: string,
     signal: AbortSignal | undefined,
+    runtime: AgentToolRuntimeContext,
   ) => AgentToolResult | Promise<AgentToolResult>;
+};
+
+export type AgentToolRuntimeContext = {
+  pathAccess: AgentToolPathAccessPolicy;
 };
 
 export type AgentToolDefinitionGroup = {

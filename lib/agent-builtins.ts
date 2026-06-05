@@ -13,6 +13,7 @@ import {
   type AgentToolCategory,
   type AgentToolDefinition,
   type AgentToolResult,
+  type AgentToolRuntimeContext,
 } from './agent-tool-contracts';
 import {
   assertAgentPathAllowedByPolicy,
@@ -157,6 +158,9 @@ function createBuiltinReadOnlyToolBase(category: AgentToolCategory) {
     timeoutMs: DEFAULT_AGENT_TOOL_TIMEOUT_MS,
     abortable: true,
     pathAccess: currentProjectPathAccessPolicy,
+    permissionInput: {
+      pathArgumentName: 'path',
+    },
   } satisfies Pick<
     AgentToolDefinition,
     | 'source'
@@ -167,6 +171,7 @@ function createBuiltinReadOnlyToolBase(category: AgentToolCategory) {
     | 'timeoutMs'
     | 'abortable'
     | 'pathAccess'
+    | 'permissionInput'
   >;
 }
 
@@ -200,9 +205,13 @@ const readToolDefinition = {
     },
     schemaStrict: true,
   },
-  execute: async (argumentsJson: string): Promise<AgentToolResult> => {
+  execute: async (
+    argumentsJson: string,
+    _signal: AbortSignal | undefined,
+    runtime: AgentToolRuntimeContext,
+  ): Promise<AgentToolResult> => {
     const input = parseToolInput('read', argumentsJson, readInputSchema);
-    const result = await readLocalFile(input);
+    const result = await readLocalFile(input, runtime.pathAccess);
 
     return {
       input: input,
@@ -241,9 +250,13 @@ const listToolDefinition = {
     },
     schemaStrict: true,
   },
-  execute: async (argumentsJson: string): Promise<AgentToolResult> => {
+  execute: async (
+    argumentsJson: string,
+    _signal: AbortSignal | undefined,
+    runtime: AgentToolRuntimeContext,
+  ): Promise<AgentToolResult> => {
     const input = parseToolInput('ls', argumentsJson, listInputSchema);
-    const result = await listLocalDirectory(input);
+    const result = await listLocalDirectory(input, runtime.pathAccess);
 
     return {
       input: input,
@@ -287,9 +300,13 @@ const findToolDefinition = {
     },
     schemaStrict: true,
   },
-  execute: async (argumentsJson: string): Promise<AgentToolResult> => {
+  execute: async (
+    argumentsJson: string,
+    _signal: AbortSignal | undefined,
+    runtime: AgentToolRuntimeContext,
+  ): Promise<AgentToolResult> => {
     const input = parseToolInput('find', argumentsJson, findInputSchema);
-    const result = await findLocalFiles(input);
+    const result = await findLocalFiles(input, runtime.pathAccess);
 
     return {
       input: input,
@@ -344,9 +361,13 @@ const grepToolDefinition = {
     },
     schemaStrict: true,
   },
-  execute: async (argumentsJson: string): Promise<AgentToolResult> => {
+  execute: async (
+    argumentsJson: string,
+    _signal: AbortSignal | undefined,
+    runtime: AgentToolRuntimeContext,
+  ): Promise<AgentToolResult> => {
     const input = parseToolInput('grep', argumentsJson, grepInputSchema);
-    const result = await grepLocalFiles(input);
+    const result = await grepLocalFiles(input, runtime.pathAccess);
 
     return {
       input: input,
@@ -394,10 +415,13 @@ function parseToolInput<T>(
   return parsedInput.data;
 }
 
-async function resolveBuiltinToolPath(inputPath: string | undefined) {
+async function resolveBuiltinToolPath(
+  inputPath: string | undefined,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
+) {
   const unresolvedPath = resolveAgentToolPath(
     inputPath,
-    currentProjectPathAccessPolicy,
+    pathAccess,
   );
 
   let realAbsolutePath: string;
@@ -414,14 +438,14 @@ async function resolveBuiltinToolPath(inputPath: string | undefined) {
 
   assertAgentPathAllowedByPolicy(
     realAbsolutePath,
-    currentProjectPathAccessPolicy,
+    pathAccess,
   );
 
   return {
     absolutePath: realAbsolutePath,
     displayPath: displayAgentToolPath(
       realAbsolutePath,
-      currentProjectPathAccessPolicy,
+      pathAccess,
     ),
   } satisfies ResolvedAgentToolPath;
 }
@@ -489,8 +513,11 @@ function truncateToUtf8Bytes(text: string, maxBytes: number) {
   };
 }
 
-async function readLocalFile(input: ReadInput): Promise<ReadFileResult> {
-  const pathInfo = await resolveBuiltinToolPath(input.path);
+async function readLocalFile(
+  input: ReadInput,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
+): Promise<ReadFileResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path, pathAccess);
   await assertFile(pathInfo);
 
   const fileContent = await readFile(
@@ -536,8 +563,11 @@ async function readLocalFile(input: ReadInput): Promise<ReadFileResult> {
   };
 }
 
-async function listLocalDirectory(input: ListInput): Promise<ListFilesResult> {
-  const pathInfo = await resolveBuiltinToolPath(input.path);
+async function listLocalDirectory(
+  input: ListInput,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
+): Promise<ListFilesResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path, pathAccess);
   await assertDirectory(pathInfo);
 
   const limit = input.limit ?? DEFAULT_LIST_LIMIT;
@@ -589,8 +619,11 @@ function readDirectoryEntryType(entry: {
   return 'other';
 }
 
-async function findLocalFiles(input: FindInput): Promise<FindFilesResult> {
-  const pathInfo = await resolveBuiltinToolPath(input.path);
+async function findLocalFiles(
+  input: FindInput,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
+): Promise<FindFilesResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path, pathAccess);
   await assertDirectory(pathInfo);
 
   const matcher = createGlobMatcher(input.pattern);
@@ -601,6 +634,7 @@ async function findLocalFiles(input: FindInput): Promise<FindFilesResult> {
     matcher,
     paths,
     limit,
+    pathAccess,
   );
 
   return {
@@ -619,6 +653,7 @@ async function collectMatchingFiles(
   matcher: (relativePath: string) => boolean,
   paths: string[],
   limit: number,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
 ): Promise<boolean> {
   const entries = (
     await readdir(/* turbopackIgnore: true */ directoryPath, {
@@ -634,7 +669,7 @@ async function collectMatchingFiles(
     const absoluteEntryPath = path.join(directoryPath, entry.name);
     const relativeEntryPath = displayAgentToolPath(
       absoluteEntryPath,
-      currentProjectPathAccessPolicy,
+      pathAccess,
     );
 
     if (entry.isDirectory()) {
@@ -643,6 +678,7 @@ async function collectMatchingFiles(
         matcher,
         paths,
         limit,
+        pathAccess,
       );
       if (childHasMore) {
         return true;
@@ -714,10 +750,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
 }
 
-async function grepLocalFiles(input: GrepInput): Promise<GrepResult> {
-  const pathInfo = await resolveBuiltinToolPath(input.path);
+async function grepLocalFiles(
+  input: GrepInput,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
+): Promise<GrepResult> {
+  const pathInfo = await resolveBuiltinToolPath(input.path, pathAccess);
   const limit = input.limit ?? DEFAULT_GREP_LIMIT;
-  const matches = await runRipgrep(input, pathInfo, limit);
+  const matches = await runRipgrep(input, pathInfo, limit, pathAccess);
   const visibleMatches = matches.slice(0, limit);
   const lineTruncated = visibleMatches.some(
     (match) => match.line.length > GREP_MAX_LINE_LENGTH,
@@ -770,6 +809,7 @@ async function runRipgrep(
   input: GrepInput,
   pathInfo: ResolvedAgentToolPath,
   limit: number,
+  pathAccess: AgentToolRuntimeContext['pathAccess'],
 ): Promise<GrepMatch[]> {
   const args = [
     '--json',
@@ -834,7 +874,7 @@ async function runRipgrep(
     matches.push({
       path: displayAgentToolPath(
         absoluteMatchPath,
-        currentProjectPathAccessPolicy,
+        pathAccess,
       ),
       lineNumber: lineNumber,
       line: lineText.replace(/\r?\n$/, ''),

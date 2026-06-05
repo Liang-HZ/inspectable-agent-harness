@@ -32,7 +32,7 @@ The project now has a real inspectable agent harness foundation:
 - read-only tools: `ls`, `find`, `grep`, `read`
 - path policy boundary
 - tool runtime boundary
-- permission skeleton
+- permission skeleton with path-policy hardening
 - structured tool output contract
 - Debug Console
 - JSONL session store and viewer
@@ -44,8 +44,13 @@ The project now has a real inspectable agent harness foundation:
 ### Sandbox
 
 Current path policy is not an OS sandbox. It is a runtime path boundary.
+`sandboxMode` now maps to the effective path policy used by file tools:
+`read_only` keeps the current project boundary, while `danger_full_access`
+allows path-declaring read-only tools to access absolute paths outside the
+project.
 
-The next real production step is to decide how sandbox modes map to tools:
+The remaining production step is OS-level enforcement and richer modes for
+write/edit, shell, and network-capable tools:
 
 ```text
 read-only
@@ -140,9 +145,10 @@ and tests already form an extensible skeleton.
 
 ### Misunderstanding 2: Sandbox Must Always Be Next
 
-Sandbox is important, but session list/replay, telemetry export, deeper tool
-registry work, or tutorial polish can also be the right next step depending on
-what needs validation.
+Sandbox is important, but "sandbox" has layers. The project now has
+pre-execution permission decisions and path-policy hardening. OS sandboxing,
+approval resume, write/edit, shell, session replay, or telemetry can each be the
+right next step depending on what needs validation.
 
 ### Misunderstanding 3: An Open-Source Tutorial Only Needs Final Code
 

@@ -741,6 +741,47 @@ but not activated by default. This gives write/edit and shell a place to attach
 their filesystem semantics later without burying permission decisions inside a
 single large tool file.
 
+## Phase 23: Permission Path Policy Hardening
+
+The permission layer now owns the first real filesystem decision instead of
+leaving every path boundary as a tool-internal error.
+
+`AgentToolDefinition` can declare which argument represents a filesystem path:
+
+```text
+permissionInput.pathArgumentName = "path"
+```
+
+`AgentToolRuntime` uses that declaration to build an `AgentPermissionRequest`
+containing:
+
+```text
+declaredPathAccess  The tool's static path capability
+pathAccess          The effective policy for this run's sandboxMode
+requestedPath       The model-supplied path argument, when present
+```
+
+The effective path policy is computed before execution:
+
+```text
+sandboxMode=read_only          -> keep current project boundary
+sandboxMode=workspace_write    -> keep current project boundary for current read-only tools
+sandboxMode=danger_full_access -> widen path-declaring tools to danger_full_access
+```
+
+Path denial now happens before `tool_started`. It emits
+`tool_permission_decided` with `decision.type="deny"`, returns a recoverable
+model-visible tool output such as
+`Error [PATH_OUTSIDE_ALLOWED_ROOT]: ...`, and lets the sampling loop continue.
+
+This also fixes an important policy invariant: `approvalPolicy=never` means
+"never ask the user"; it does not bypass filesystem boundaries.
+
+This is still not OS sandboxing. The read-only tools also keep a `realpath`
+check inside their handler so symlink escapes are caught even after the
+permission pre-check. The next deeper layer is real sandbox enforcement for
+write/edit, shell, and network-capable tools.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core

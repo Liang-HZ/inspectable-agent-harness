@@ -30,7 +30,7 @@
 - read-only tools: `ls`, `find`, `grep`, `read`
 - path policy boundary
 - tool runtime boundary
-- permission skeleton
+- permission skeleton with path-policy hardening
 - structured tool output contract
 - Debug Console
 - JSONL session store and viewer
@@ -42,8 +42,10 @@
 ### Sandbox
 
 当前 path policy 不是 OS sandbox。它只是 runtime path boundary。
+`sandboxMode` 现在已经会映射到文件工具使用的 effective path policy：
+`read_only` 保持当前项目边界，`danger_full_access` 允许声明了路径访问的只读工具访问项目外绝对路径。
 
-下一个真实生产步骤是决定 sandbox modes 如何映射到 tools：
+剩下的生产级步骤是 OS-level enforcement，以及为 write/edit、shell、network-capable tools 设计更完整的模式：
 
 ```text
 read-only
@@ -134,7 +136,7 @@ what remains deferred
 
 ### 误解二：下一步一定要先做 sandbox
 
-Sandbox 很重要，但也可以先做 session list/replay、telemetry export、tool registry 深化或教程完善。顺序取决于下一阶段最需要验证什么。
+Sandbox 很重要，但“sandbox”本身分层。项目现在已经有 pre-execution permission decisions 和 path-policy hardening。OS sandbox、approval resume、write/edit、shell、session replay、telemetry 都可能成为下一步，取决于下一阶段最需要验证什么。
 
 ### 误解三：开源教程只需要介绍最终代码
 
