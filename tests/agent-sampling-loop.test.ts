@@ -13,6 +13,7 @@ import type { AgentModelGateway } from '../lib/model-gateway';
 import type { AgentResponseItem } from '../lib/agent-response-items';
 import type { AgentEvent } from '../lib/agent-events';
 import { createAgentRunContext } from '../lib/agent-run-context';
+import type { AgentRunPolicy } from '../lib/agent-permissions';
 
 const usage = {
   tokenUsage: null,
@@ -25,6 +26,8 @@ const baseInput: AgentInput = {
   context: undefined,
   model: undefined,
   temperature: undefined,
+  approvalPolicy: 'on_request',
+  sandboxMode: 'read_only',
 };
 
 const initialHistory = (): AgentResponseItem[] => [
@@ -78,8 +81,11 @@ function createFakeGateway(
   };
 }
 
-async function runLoopWithFakeGateway(rounds: AgentModelStreamEvent[][]) {
-  const context = createAgentRunContext({ runId: 'test-run' });
+async function runLoopWithFakeGateway(
+  rounds: AgentModelStreamEvent[][],
+  policy?: AgentRunPolicy,
+) {
+  const context = createAgentRunContext({ runId: 'test-run', policy: policy });
   const history = initialHistory();
   const steps: AgentStep[] = [];
   const events: AgentEvent[] = [];
@@ -152,6 +158,64 @@ test('uses a no-tool assistant message as the final response', async () => {
       .filter((event) => event.type === 'assistant_delta')
       .map((event) => event.delta),
     ['Final ', 'answer.'],
+  );
+});
+
+test('exposes only read-only built-in tools to the model in safe mode', async () => {
+  const output = await runLoopWithFakeGateway([
+    [
+      {
+        type: 'text_delta',
+        delta: 'No edit is needed.',
+      },
+      {
+        type: 'assistant_message_done',
+        message: { text: 'No edit is needed.', providerPhase: null },
+      },
+      { type: 'completed', model: 'fake-model', usage: usage },
+    ],
+  ]);
+  const modelRequestedEvent = output.events.find(
+    (event) => event.type === 'model_requested',
+  );
+
+  assert.notEqual(modelRequestedEvent, undefined);
+  assert.equal(modelRequestedEvent?.type, 'model_requested');
+  assert.deepEqual(
+    modelRequestedEvent.request.tools.map((tool) => tool.name),
+    ['read', 'grep', 'find', 'ls'],
+  );
+});
+
+test('exposes editing built-in tools to the model in workspace write mode', async () => {
+  const output = await runLoopWithFakeGateway(
+    [
+      [
+        {
+          type: 'text_delta',
+          delta: 'No edit is needed.',
+        },
+        {
+          type: 'assistant_message_done',
+          message: { text: 'No edit is needed.', providerPhase: null },
+        },
+        { type: 'completed', model: 'fake-model', usage: usage },
+      ],
+    ],
+    {
+      approvalPolicy: 'never',
+      sandboxMode: 'workspace_write',
+    },
+  );
+  const modelRequestedEvent = output.events.find(
+    (event) => event.type === 'model_requested',
+  );
+
+  assert.notEqual(modelRequestedEvent, undefined);
+  assert.equal(modelRequestedEvent?.type, 'model_requested');
+  assert.deepEqual(
+    modelRequestedEvent.request.tools.map((tool) => tool.name),
+    ['read', 'grep', 'find', 'ls', 'write', 'edit'],
   );
 });
 

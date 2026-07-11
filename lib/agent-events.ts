@@ -10,6 +10,7 @@ import type {
 import type {
   AgentPermissionDecision,
   AgentPermissionRequest,
+  AgentRunPolicy,
 } from './agent-permissions';
 
 export type AgentRunStatus =
@@ -31,6 +32,7 @@ export type AgentEvent =
   | {
       type: 'run_started';
       runId: string;
+      policy: AgentRunPolicy;
     }
   | {
       type: 'step_created';
@@ -109,6 +111,7 @@ export type AgentRunState = {
   steps: AgentStep[];
   answer: string;
   model: string | undefined;
+  policy: AgentRunPolicy | undefined;
   usage: AgentUsage | undefined;
   error: string | undefined;
 };
@@ -121,6 +124,7 @@ export function createAgentRunState(runId: string): AgentRunState {
     steps: [],
     answer: '',
     model: undefined,
+    policy: undefined,
     usage: undefined,
     error: undefined,
   };
@@ -137,6 +141,7 @@ export function applyAgentEvent(
       ...state,
       status: 'running',
       events: events,
+      policy: event.policy,
     };
   }
 

@@ -31,7 +31,7 @@ import {
 } from './agent-session-store';
 import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
 import { executeAgentToolBatch } from './agent-tool-scheduler';
-import { agentTools } from './agent-tools';
+import { getAgentToolsForRunPolicy } from './agent-tools';
 import type { AgentToolExecution, AgentToolExecutionMode } from './agent-tools';
 import type { AgentToolBatchExecution } from './agent-tool-scheduler';
 import type { ModelConfig } from './env';
@@ -70,7 +70,7 @@ type SamplingRoundResult = {
 };
 
 const AGENT_SYSTEM_MESSAGE =
-  'You are an inspectable coding agent. Decide whether the task needs local project exploration. Use ls/find/grep/read for local file exploration: list directories to orient yourself, find file paths before reading, grep for text or symbols, and read exact files with pagination. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
+  'You are an inspectable coding agent. Decide whether the task needs local project exploration. Use ls/find/grep/read for local file exploration: list directories to orient yourself, find file paths before reading, grep for text or symbols, and read exact files with pagination. When editing tools are available, read the target file before edit, use edit for precise changes to existing files, and use write only for creating files or complete overwrites. If no tool is needed, answer directly. Keep the final answer practical and use the same language as the user.';
 const REPEATED_TOOL_CALL_LIMIT = 3;
 
 type ToolLoopGuardEntry = {
@@ -92,6 +92,19 @@ function buildAgentPrompt(input: AgentInput): string {
   return sections
     .filter((section): section is string => section !== undefined)
     .join('\n\n');
+}
+
+function createAgentRunContextForInput(
+  input: AgentInput,
+  contextInput: AgentRunContextInput,
+): AgentRunContext {
+  return createAgentRunContext({
+    ...contextInput,
+    policy: contextInput.policy ?? {
+      approvalPolicy: input.approvalPolicy,
+      sandboxMode: input.sandboxMode,
+    },
+  });
 }
 
 function readAssistantAnswer(text: string): string {
@@ -117,6 +130,8 @@ function createPromptStep(
       context: input.context,
       modelOverride: input.model,
       temperature: input.temperature,
+      approvalPolicy: input.approvalPolicy,
+      sandboxMode: input.sandboxMode,
       prompt: prompt,
     },
   };
@@ -359,7 +374,7 @@ async function runSamplingRound(
 ): Promise<SamplingRoundResult> {
   const request: AgentModelRequest = {
     messages: responseItemsToModelMessages(history),
-    tools: agentTools,
+    tools: getAgentToolsForRunPolicy(context.policy),
     toolChoice: 'auto',
     temperature: input.temperature,
   };
@@ -570,7 +585,7 @@ export async function runAgent(
   config: ModelConfig,
   contextInput: AgentRunContextInput,
 ): Promise<AgentResult> {
-  const context = createAgentRunContext(contextInput);
+  const context = createAgentRunContextForInput(input, contextInput);
   const modelGateway = createAgentModelGateway(config, context);
   const prompt = buildAgentPrompt(input);
   const steps: AgentStep[] = [];
@@ -627,7 +642,7 @@ export async function runAgentStream(
   contextInput: AgentRunContextInput,
   callbacks: RunAgentStreamCallbacks,
 ): Promise<AgentResult> {
-  const context = createAgentRunContext(contextInput);
+  const context = createAgentRunContextForInput(input, contextInput);
   const modelGateway = createAgentModelGateway(config, context);
   const session = createAgentSession({
     id: context.runId,
@@ -667,6 +682,7 @@ export async function runAgentStream(
   emitAgentEvent({
     type: 'run_started',
     runId: context.runId,
+    policy: context.policy,
   });
 
   assertAgentRunNotAborted(context);

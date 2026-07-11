@@ -9,6 +9,13 @@ import type {
   AgentModelUsageSnapshot,
   AgentModelWireApi,
 } from './agent-model-types';
+import type {
+  AgentApprovalPolicy,
+  AgentPermissionDecision,
+  AgentPermissionRequest,
+  AgentRunPolicy,
+  AgentSandboxMode,
+} from './agent-permissions';
 import type { AgentResponseItem } from './agent-response-items';
 
 export type AgentRequestBody = {
@@ -17,6 +24,8 @@ export type AgentRequestBody = {
   context: string | undefined;
   model: string | undefined;
   temperature: string | undefined;
+  approvalPolicy: AgentApprovalPolicy | undefined;
+  sandboxMode: AgentSandboxMode | undefined;
 };
 
 export const agentStepSchema = z.strictObject({
@@ -73,6 +82,7 @@ export type AgentDebugStreamEvent =
   | {
       type: 'runStarted';
       runId: string;
+      policy: AgentRunPolicy;
     }
   | {
       type: 'modelStarted';
@@ -119,13 +129,13 @@ export type AgentDebugStreamEvent =
     }
   | {
       type: 'toolPermissionDecided';
-      request: unknown;
-      decision: unknown;
+      request: AgentPermissionRequest;
+      decision: AgentPermissionDecision;
     }
   | {
       type: 'approvalRequested';
-      request: unknown;
-      decision: unknown;
+      request: AgentPermissionRequest;
+      decision: AgentPermissionDecision;
     }
   | {
       type: 'runCancelled';
@@ -162,6 +172,8 @@ export const agentInputValidationErrorsSchema = z.strictObject({
     context: z.array(z.string()).optional(),
     model: z.array(z.string()).optional(),
     temperature: z.array(z.string()).optional(),
+    approvalPolicy: z.array(z.string()).optional(),
+    sandboxMode: z.array(z.string()).optional(),
   }),
 });
 

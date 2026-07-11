@@ -54,6 +54,8 @@ export async function requestAgentRun(
         context: body.context,
         model: body.model,
         temperature: body.temperature,
+        approvalPolicy: body.approvalPolicy,
+        sandboxMode: body.sandboxMode,
       }),
     });
 
@@ -142,6 +144,8 @@ export async function requestAgentRunStream(
       context: body.context,
       model: body.model,
       temperature: body.temperature,
+      approvalPolicy: body.approvalPolicy,
+      sandboxMode: body.sandboxMode,
     }),
   });
 

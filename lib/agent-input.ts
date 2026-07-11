@@ -1,8 +1,15 @@
 import * as z from 'zod';
 
 import type { AgentInputValidationErrors } from './agent-api-types';
+import { DEFAULT_AGENT_RUN_POLICY } from './agent-permissions';
 
 const REQUEST_BODY_VALIDATION_ERROR = 'Request body validation failed.';
+const AGENT_APPROVAL_POLICIES = ['strict', 'on_request', 'never'] as const;
+const AGENT_SANDBOX_MODES = [
+  'read_only',
+  'workspace_write',
+  'danger_full_access',
+] as const;
 
 const optionalTrimmedStringSchema = z.preprocess(
   (value: unknown) => {
@@ -44,6 +51,48 @@ const optionalTemperatureSchema = z.preprocess(
     .optional(),
 );
 
+const optionalAgentApprovalPolicySchema = z.preprocess(
+  (value: unknown) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed === '' ? undefined : trimmed;
+    }
+
+    return value;
+  },
+  z
+    .enum(AGENT_APPROVAL_POLICIES, {
+      error:
+        'Field `approvalPolicy` must be one of: strict, on_request, never.',
+    })
+    .default(DEFAULT_AGENT_RUN_POLICY.approvalPolicy),
+);
+
+const optionalAgentSandboxModeSchema = z.preprocess(
+  (value: unknown) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed === '' ? undefined : trimmed;
+    }
+
+    return value;
+  },
+  z
+    .enum(AGENT_SANDBOX_MODES, {
+      error:
+        'Field `sandboxMode` must be one of: read_only, workspace_write, danger_full_access.',
+    })
+    .default(DEFAULT_AGENT_RUN_POLICY.sandboxMode),
+);
+
 export const agentInputSchema = z.strictObject(
   {
     task: z
@@ -59,6 +108,8 @@ export const agentInputSchema = z.strictObject(
     context: optionalTrimmedStringSchema,
     model: optionalTrimmedStringSchema,
     temperature: optionalTemperatureSchema,
+    approvalPolicy: optionalAgentApprovalPolicySchema,
+    sandboxMode: optionalAgentSandboxModeSchema,
   },
   {
     error: (issue) =>

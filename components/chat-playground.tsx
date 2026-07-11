@@ -18,12 +18,22 @@ import type {
   AgentStep,
   AgentUsage,
 } from '../lib/agent-api-types';
-import type { AgentSessionRecord } from '../lib/agent-session-store';
+import type {
+  AgentApprovalPolicy,
+  AgentPermissionDecision,
+  AgentPermissionRequest,
+  AgentRunPolicy,
+  AgentSandboxMode,
+} from '../lib/agent-permissions';
+import type {
+  AgentSessionRecord,
+  AgentSessionSummary,
+} from '../lib/agent-session-store';
 import { requestChatCompletion } from '../lib/chat-api-client';
 import type { ChatApiResponse } from '../lib/chat-api-types';
 
 type WorkbenchMode = 'chat' | 'agent';
-type AgentPageMode = 'agent' | 'debug' | 'session';
+type AgentPageMode = 'debug' | 'audit' | 'session';
 
 type ChatFormState = {
   message: string;
@@ -37,6 +47,8 @@ type AgentFormState = {
   context: string;
   model: string;
   temperature: string;
+  approvalPolicy: AgentApprovalPolicy;
+  sandboxMode: AgentSandboxMode;
 };
 
 type ChatViewState =
@@ -144,6 +156,14 @@ type WorkbenchAction =
       value: string;
     }
   | {
+      type: 'agentApprovalPolicyChanged';
+      value: AgentApprovalPolicy;
+    }
+  | {
+      type: 'agentSandboxModeChanged';
+      value: AgentSandboxMode;
+    }
+  | {
       type: 'agentSubmitStarted';
     }
   | {
@@ -209,19 +229,37 @@ type AgentFormProps = {
   onContextChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onTemperatureChange: (value: string) => void;
+  onApprovalPolicyChange: (value: AgentApprovalPolicy) => void;
+  onSandboxModeChange: (value: AgentSandboxMode) => void;
 };
 
-type ResultPanelProps = {
-  mode: WorkbenchMode;
+type AgentInspectorPanelProps = {
   agentPage: AgentPageMode;
-  chatView: ChatViewState;
   agentView: AgentViewState;
   onAgentPageChange: (page: AgentPageMode) => void;
 };
 
+const AGENT_APPROVAL_POLICY_OPTIONS: Array<{
+  value: AgentApprovalPolicy;
+  label: string;
+}> = [
+  { value: 'on_request', label: 'Ask when needed' },
+  { value: 'strict', label: 'Strict approval' },
+  { value: 'never', label: 'Auto approve' },
+];
+
+const AGENT_SANDBOX_MODE_OPTIONS: Array<{
+  value: AgentSandboxMode;
+  label: string;
+}> = [
+  { value: 'read_only', label: 'Read-only' },
+  { value: 'workspace_write', label: 'Workspace write' },
+  { value: 'danger_full_access', label: 'Danger full access' },
+];
+
 const initialState: WorkbenchState = {
   mode: 'agent',
-  agentPage: 'agent',
+  agentPage: 'debug',
   chatForm: {
     message: '人生的意义是什么。',
     model: 'gpt-5.5',
@@ -234,9 +272,12 @@ const initialState: WorkbenchState = {
   agentForm: {
     task: '请梳理当前项目的 Tool Runtime Boundary v1：找出工具注册、路径策略、工具调度、provider schema 适配分别在哪些文件，并说明一次 read 工具调用从模型请求到写回 history 的链路。',
     goal: '必须使用本地项目探索工具完成，至少查看相关源码文件后再回答。',
-    context: '这是一次用于验收 read、grep、find、ls 真实工具链路的请求。重点关注 lib/agent-tools.ts、lib/agent-builtins.ts、lib/agent-tool-contracts.ts、lib/agent-path-policy.ts、lib/agent-tool-runtime.ts、lib/agent-tool-scheduler.ts、lib/openai-tool-schema.ts、lib/agent.ts。',
+    context:
+      '这是一次用于验收 read、grep、find、ls 真实工具链路的请求。重点关注 lib/agent-tools.ts、lib/agent-builtins.ts、lib/agent-tool-contracts.ts、lib/agent-path-policy.ts、lib/agent-tool-runtime.ts、lib/agent-tool-scheduler.ts、lib/openai-tool-schema.ts、lib/agent.ts。',
     model: 'gpt-5.5',
     temperature: '0.7',
+    approvalPolicy: 'on_request',
+    sandboxMode: 'read_only',
   },
   agentView: {
     status: 'idle',
@@ -353,6 +394,24 @@ function workbenchReducer(
         agentForm: {
           ...state.agentForm,
           temperature: action.value,
+        },
+      };
+
+    case 'agentApprovalPolicyChanged':
+      return {
+        ...state,
+        agentForm: {
+          ...state.agentForm,
+          approvalPolicy: action.value,
+        },
+      };
+
+    case 'agentSandboxModeChanged':
+      return {
+        ...state,
+        agentForm: {
+          ...state.agentForm,
+          sandboxMode: action.value,
         },
       };
 
@@ -487,6 +546,8 @@ function firstAgentValidationMessage(
     fieldErrors?.context?.[0] ??
     fieldErrors?.model?.[0] ??
     fieldErrors?.temperature?.[0] ??
+    fieldErrors?.approvalPolicy?.[0] ??
+    fieldErrors?.sandboxMode?.[0] ??
     response.validationErrors?.formErrors[0] ??
     response.error
   );
@@ -533,6 +594,25 @@ function agentRunId(view: AgentViewState): string | undefined {
   );
 
   return runStartedEvent?.runId;
+}
+
+function agentRunPolicyFromEvents(
+  events: AgentDebugStreamEvent[],
+): AgentRunPolicy | undefined {
+  const runStartedEvent = events.find(
+    (event): event is Extract<AgentDebugStreamEvent, { type: 'runStarted' }> =>
+      event.type === 'runStarted',
+  );
+
+  return runStartedEvent?.policy;
+}
+
+function runPolicyLabel(policy: AgentRunPolicy | undefined): string {
+  if (policy === undefined) {
+    return 'pending';
+  }
+
+  return `${policy.approvalPolicy} / ${policy.sandboxMode}`;
 }
 
 function statusText(
@@ -606,6 +686,34 @@ function TextAreaField({
   );
 }
 
+function SelectField<TValue extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: TValue;
+  options: Array<{ value: TValue; label: string }>;
+  onChange: (value: TValue) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as TValue)}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function ModeSwitcher({ mode, onModeChange }: ModeSwitcherProps) {
   return (
     <div className="modeSwitcher" aria-label="API mode">
@@ -637,17 +745,6 @@ function AgentPageSwitcher({ page, onPageChange }: AgentPageSwitcherProps) {
       <button
         type="button"
         className={
-          page === 'agent'
-            ? 'subPageButton activeSubPageButton'
-            : 'subPageButton'
-        }
-        onClick={() => onPageChange('agent')}
-      >
-        Agent
-      </button>
-      <button
-        type="button"
-        className={
           page === 'debug'
             ? 'subPageButton activeSubPageButton'
             : 'subPageButton'
@@ -655,6 +752,17 @@ function AgentPageSwitcher({ page, onPageChange }: AgentPageSwitcherProps) {
         onClick={() => onPageChange('debug')}
       >
         Debug
+      </button>
+      <button
+        type="button"
+        className={
+          page === 'audit'
+            ? 'subPageButton activeSubPageButton'
+            : 'subPageButton'
+        }
+        onClick={() => onPageChange('audit')}
+      >
+        Audit
       </button>
       <button
         type="button"
@@ -730,23 +838,49 @@ function AgentForm({
   onContextChange,
   onModelChange,
   onTemperatureChange,
+  onApprovalPolicyChange,
+  onSandboxModeChange,
 }: AgentFormProps) {
   return (
-    <form className="requestForm" onSubmit={onSubmit}>
-      <TextAreaField label="Task" value={form.task} onChange={onTaskChange} />
-      <TextField label="Goal" value={form.goal} onChange={onGoalChange} />
+    <form className="requestForm agentComposerForm" onSubmit={onSubmit}>
       <TextAreaField
-        label="Context"
-        value={form.context}
-        onChange={onContextChange}
-        rows={3}
+        label="Task"
+        value={form.task}
+        onChange={onTaskChange}
+        rows={4}
       />
-      <ModelControls
-        model={form.model}
-        temperature={form.temperature}
-        onModelChange={onModelChange}
-        onTemperatureChange={onTemperatureChange}
-      />
+      <details className="composerSettings">
+        <summary>Goal, context, model, and policy</summary>
+        <div className="composerSettingsBody">
+          <TextField label="Goal" value={form.goal} onChange={onGoalChange} />
+          <TextAreaField
+            label="Context"
+            value={form.context}
+            onChange={onContextChange}
+            rows={3}
+          />
+          <ModelControls
+            model={form.model}
+            temperature={form.temperature}
+            onModelChange={onModelChange}
+            onTemperatureChange={onTemperatureChange}
+          />
+          <div className="controlGrid policyControlGrid">
+            <SelectField
+              label="Approval"
+              value={form.approvalPolicy}
+              options={AGENT_APPROVAL_POLICY_OPTIONS}
+              onChange={onApprovalPolicyChange}
+            />
+            <SelectField
+              label="Sandbox"
+              value={form.sandboxMode}
+              options={AGENT_SANDBOX_MODE_OPTIONS}
+              onChange={onSandboxModeChange}
+            />
+          </div>
+        </div>
+      </details>
       <div className="formActions">
         <SubmitButton isSubmitting={isSubmitting} disabled={!canSubmit}>
           {isSubmitting ? 'Running agent' : 'Run agent'}
@@ -771,18 +905,24 @@ function ChatForm({
   onTemperatureChange,
 }: ChatFormProps) {
   return (
-    <form className="requestForm" onSubmit={onSubmit}>
+    <form className="requestForm chatComposerForm" onSubmit={onSubmit}>
       <TextAreaField
         label="Message"
         value={form.message}
         onChange={onMessageChange}
+        rows={4}
       />
-      <ModelControls
-        model={form.model}
-        temperature={form.temperature}
-        onModelChange={onModelChange}
-        onTemperatureChange={onTemperatureChange}
-      />
+      <details className="composerSettings">
+        <summary>Model settings</summary>
+        <div className="composerSettingsBody">
+          <ModelControls
+            model={form.model}
+            temperature={form.temperature}
+            onModelChange={onModelChange}
+            onTemperatureChange={onTemperatureChange}
+          />
+        </div>
+      </details>
       <SubmitButton isSubmitting={isSubmitting} disabled={!canSubmit}>
         {isSubmitting ? 'Calling model' : 'Call model'}
       </SubmitButton>
@@ -792,6 +932,21 @@ function ChatForm({
 
 function EmptyState({ children }: { children: ReactNode }) {
   return <div className="emptyState">{children}</div>;
+}
+
+function WorkbenchEmptyState({
+  title,
+  detail,
+}: {
+  title: string;
+  detail?: string;
+}) {
+  return (
+    <section className="workbenchEmptyState">
+      <span>{title}</span>
+      {detail === undefined ? null : <p>{detail}</p>}
+    </section>
+  );
 }
 
 function ErrorState({ children }: { children: ReactNode }) {
@@ -848,6 +1003,11 @@ type HistoryCommittedDebugEvent = Extract<
   { type: 'historyCommitted' }
 >;
 
+type PermissionAuditDebugEvent = Extract<
+  AgentDebugStreamEvent,
+  { type: 'toolPermissionDecided' | 'approvalRequested' }
+>;
+
 type AgentSessionFetchState =
   | {
       status: 'idle';
@@ -867,6 +1027,28 @@ type AgentSessionFetchState =
   | {
       status: 'error';
       records: AgentSessionRecord[] | null;
+      error: string;
+    };
+
+type AgentSessionListFetchState =
+  | {
+      status: 'idle';
+      sessions: AgentSessionSummary[];
+      error: null;
+    }
+  | {
+      status: 'loading';
+      sessions: AgentSessionSummary[];
+      error: null;
+    }
+  | {
+      status: 'success';
+      sessions: AgentSessionSummary[];
+      error: null;
+    }
+  | {
+      status: 'error';
+      sessions: AgentSessionSummary[];
       error: string;
     };
 
@@ -944,9 +1126,9 @@ function eventLabel(event: AgentDebugStreamEvent): string {
     case 'toolFinished':
       return `${event.toolName} ${event.isError ? 'errored' : 'finished'}`;
     case 'toolPermissionDecided':
-      return 'permission decided';
+      return `${event.request.toolName} ${event.decision.type}`;
     case 'approvalRequested':
-      return 'approval requested';
+      return `${event.request.toolName} approval requested`;
     case 'runCancelled':
       return event.reason;
   }
@@ -978,6 +1160,16 @@ function historyCommittedEvents(
   return events.filter(
     (event): event is HistoryCommittedDebugEvent =>
       event.type === 'historyCommitted',
+  );
+}
+
+function permissionAuditEvents(
+  events: AgentDebugStreamEvent[],
+): PermissionAuditDebugEvent[] {
+  return events.filter(
+    (event): event is PermissionAuditDebugEvent =>
+      event.type === 'toolPermissionDecided' ||
+      event.type === 'approvalRequested',
   );
 }
 
@@ -1235,6 +1427,106 @@ function HistoryCommitDebugView({
   );
 }
 
+function decisionStatusClass(decision: AgentPermissionDecision): string {
+  if (decision.type === 'deny') {
+    return 'toolStatus errorToolStatus';
+  }
+
+  if (decision.type === 'ask') {
+    return 'toolStatus askToolStatus';
+  }
+
+  return 'toolStatus';
+}
+
+function permissionRequestSummary(request: AgentPermissionRequest): string {
+  const path =
+    request.resolvedPath ?? request.requestedPath ?? request.pathAccess.type;
+
+  return `${request.category} · ${request.source}/${request.group} · ${path}`;
+}
+
+function PermissionAuditView({
+  event,
+  index,
+}: {
+  event: PermissionAuditDebugEvent;
+  index: number;
+}) {
+  return (
+    <article className="auditDecisionCard">
+      <div className="toolDebugHeader">
+        <div>
+          <h3>
+            {index + 1}. {event.request.toolName}
+          </h3>
+          <span>{permissionRequestSummary(event.request)}</span>
+        </div>
+        <strong className={decisionStatusClass(event.decision)}>
+          {event.decision.type}
+        </strong>
+      </div>
+      <div className="debugSummaryGrid compactDebugSummary">
+        <div>
+          <span className="debugLabel">Policy</span>
+          <strong>
+            {event.request.approvalPolicy} / {event.request.sandboxMode}
+          </strong>
+        </div>
+        <div>
+          <span className="debugLabel">Decision source</span>
+          <strong>{event.decision.source}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Path access</span>
+          <strong>{event.request.pathAccess.type}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Prior read</span>
+          <strong>
+            {event.request.requiresPriorRead
+              ? String(event.request.priorReadSatisfied)
+              : 'not required'}
+          </strong>
+        </div>
+      </div>
+      <p className="auditReason">{event.decision.reason}</p>
+      <details className="debugDetails">
+        <summary>Audit payload</summary>
+        <pre className="jsonBlock fullJsonBlock">
+          {formatJson({
+            eventType: event.type,
+            request: event.request,
+            decision: event.decision,
+          })}
+        </pre>
+      </details>
+    </article>
+  );
+}
+
+function PermissionAuditList({
+  auditEvents,
+}: {
+  auditEvents: PermissionAuditDebugEvent[];
+}) {
+  if (auditEvents.length === 0) {
+    return <EmptyState>No permission decisions yet.</EmptyState>;
+  }
+
+  return (
+    <div className="auditDebugList">
+      {auditEvents.map((event, index) => (
+        <PermissionAuditView
+          event={event}
+          index={index}
+          key={`${event.type}-${event.request.toolCallId}-${index}`}
+        />
+      ))}
+    </div>
+  );
+}
+
 function AgentDebugConsole({
   events,
   usage,
@@ -1242,10 +1534,12 @@ function AgentDebugConsole({
   events: AgentDebugStreamEvent[];
   usage: AgentUsage | undefined;
 }) {
+  const policy = agentRunPolicyFromEvents(events);
   const toolCards = createToolDebugCards(events);
   const modelRequests = modelRequestEvents(events);
   const modelOutputs = modelCompletedEvents(events);
   const historyCommits = historyCommittedEvents(events);
+  const auditEvents = permissionAuditEvents(events);
 
   return (
     <section className="debugPanel">
@@ -1257,6 +1551,10 @@ function AgentDebugConsole({
         <div>
           <span className="debugLabel">Usage</span>
           <strong>{usageLine(usage)}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Run policy</span>
+          <strong>{runPolicyLabel(policy)}</strong>
         </div>
         <div>
           <span className="debugLabel">Model rounds</span>
@@ -1271,6 +1569,10 @@ function AgentDebugConsole({
         <div>
           <span className="debugLabel">History commits</span>
           <strong>{historyCommits.length}</strong>
+        </div>
+        <div>
+          <span className="debugLabel">Audit decisions</span>
+          <strong>{auditEvents.length}</strong>
         </div>
       </div>
       {modelRequests.length === 0 ? (
@@ -1326,6 +1628,20 @@ function AgentDebugConsole({
   );
 }
 
+function AgentAuditConsole({ events }: { events: AgentDebugStreamEvent[] }) {
+  const auditEvents = permissionAuditEvents(events);
+
+  return (
+    <section className="debugPanel auditPanel">
+      <div className="sectionHeader">
+        <span>Permission audit</span>
+        <code>{auditEvents.length} decision(s)</code>
+      </div>
+      <PermissionAuditList auditEvents={auditEvents} />
+    </section>
+  );
+}
+
 async function fetchAgentSessionRecords(
   runId: string,
 ): Promise<AgentSessionRecord[]> {
@@ -1361,13 +1677,80 @@ async function fetchAgentSessionRecords(
   throw new Error('Session API returned an unexpected response shape.');
 }
 
+async function fetchAgentSessionSummaries(): Promise<AgentSessionSummary[]> {
+  const response = await fetch('/api/agent/sessions');
+  const data = (await response.json()) as unknown;
+
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    'ok' in data &&
+    data.ok === true &&
+    'sessions' in data &&
+    Array.isArray(data.sessions)
+  ) {
+    return data.sessions as AgentSessionSummary[];
+  }
+
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    'error' in data &&
+    typeof data.error === 'string'
+  ) {
+    throw new Error(data.error);
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Session list request failed with status ${response.status}.`,
+    );
+  }
+
+  throw new Error('Session list API returned an unexpected response shape.');
+}
+
 function recordsToJsonl(records: AgentSessionRecord[]): string {
   return records.map((record) => JSON.stringify(record)).join('\n');
+}
+
+function sessionPolicyFromRecords(
+  records: AgentSessionRecord[],
+): AgentRunPolicy | undefined {
+  const metaRecord = records.find((record) => record.type === 'session_meta');
+
+  if (metaRecord?.type === 'session_meta') {
+    return metaRecord.payload.policy;
+  }
+
+  const turnContext = records.find((record) => record.type === 'turn_context');
+
+  if (turnContext?.type === 'turn_context') {
+    return {
+      approvalPolicy: turnContext.payload.approvalPolicy,
+      sandboxMode: turnContext.payload.sandboxMode,
+    };
+  }
+
+  return undefined;
+}
+
+function sessionShortId(id: string): string {
+  return id.length <= 8 ? id : id.slice(-8);
 }
 
 function AgentSessionView({ view }: { view: AgentViewState }) {
   const runId = agentRunId(view);
   const refreshKey = agentViewDebugEvents(view).length;
+  const [selectedSessionId, setSelectedSessionId] = useState<
+    string | undefined
+  >(runId);
+  const [listFetchState, setListFetchState] =
+    useState<AgentSessionListFetchState>({
+      status: 'idle',
+      sessions: [],
+      error: null,
+    });
   const [fetchState, setFetchState] = useState<AgentSessionFetchState>({
     status: 'idle',
     records: null,
@@ -1375,7 +1758,53 @@ function AgentSessionView({ view }: { view: AgentViewState }) {
   });
 
   useEffect(() => {
-    if (runId === undefined) {
+    if (runId !== undefined) {
+      setSelectedSessionId(runId);
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setListFetchState((current) => ({
+      status: 'loading',
+      sessions: current.sessions,
+      error: null,
+    }));
+
+    fetchAgentSessionSummaries()
+      .then((sessions) => {
+        if (cancelled) {
+          return;
+        }
+
+        setListFetchState({
+          status: 'success',
+          sessions: sessions,
+          error: null,
+        });
+
+        setSelectedSessionId((current) => current ?? sessions[0]?.id);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setListFetchState((current) => ({
+          status: 'error',
+          sessions: current.sessions,
+          error:
+            error instanceof Error ? error.message : 'Session list load failed',
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  useEffect(() => {
+    if (selectedSessionId === undefined) {
       setFetchState({
         status: 'idle',
         records: null,
@@ -1391,7 +1820,7 @@ function AgentSessionView({ view }: { view: AgentViewState }) {
       error: null,
     }));
 
-    fetchAgentSessionRecords(runId)
+    fetchAgentSessionRecords(selectedSessionId)
       .then((records) => {
         if (cancelled) {
           return;
@@ -1418,40 +1847,89 @@ function AgentSessionView({ view }: { view: AgentViewState }) {
     return () => {
       cancelled = true;
     };
-  }, [runId, refreshKey]);
+  }, [selectedSessionId, refreshKey]);
 
-  if (runId === undefined) {
-    return (
-      <EmptyState>Session JSONL will appear after a run starts.</EmptyState>
-    );
-  }
-
+  const sessions = listFetchState.sessions;
+  const selectedSummary = sessions.find(
+    (summary) => summary.id === selectedSessionId,
+  );
   const records = fetchState.records ?? [];
+  const selectedPolicy =
+    records.length > 0
+      ? sessionPolicyFromRecords(records)
+      : selectedSummary === undefined
+        ? undefined
+        : {
+            approvalPolicy: selectedSummary.approvalPolicy,
+            sandboxMode: selectedSummary.sandboxMode,
+          };
 
   return (
     <section className="sessionPanel">
       <div className="sectionHeader">
         <span>Session JSONL</span>
-        <code>{runId}</code>
+        <code>{selectedSessionId ?? 'no session selected'}</code>
       </div>
-      <div className="sessionSummary">
-        <div>
-          <span className="debugLabel">Records</span>
-          <strong>{records.length}</strong>
+      <div className="sessionBrowser">
+        <div className="sessionList">
+          <div className="debugLabel">Sessions</div>
+          {listFetchState.status === 'error' ? (
+            <ErrorState>{listFetchState.error}</ErrorState>
+          ) : null}
+          {sessions.length === 0 ? (
+            <EmptyState>No agent sessions found.</EmptyState>
+          ) : (
+            sessions.map((session) => (
+              <button
+                className={
+                  session.id === selectedSessionId
+                    ? 'sessionListButton activeSessionListButton'
+                    : 'sessionListButton'
+                }
+                key={session.id}
+                type="button"
+                onClick={() => setSelectedSessionId(session.id)}
+              >
+                <span>{session.model}</span>
+                <strong>{sessionShortId(session.id)}</strong>
+                <small>
+                  {session.approvalPolicy} / {session.sandboxMode}
+                </small>
+              </button>
+            ))
+          )}
         </div>
-        <div>
-          <span className="debugLabel">Load state</span>
-          <strong>{fetchState.status}</strong>
+        <div className="sessionRecordPane">
+          <div className="sessionSummary">
+            <div>
+              <span className="debugLabel">Records</span>
+              <strong>{records.length}</strong>
+            </div>
+            <div>
+              <span className="debugLabel">Load state</span>
+              <strong>{fetchState.status}</strong>
+            </div>
+            <div>
+              <span className="debugLabel">Run policy</span>
+              <strong>{runPolicyLabel(selectedPolicy)}</strong>
+            </div>
+            <div>
+              <span className="debugLabel">Source</span>
+              <strong>{selectedSummary?.source ?? 'pending'}</strong>
+            </div>
+          </div>
+          {fetchState.status === 'error' ? (
+            <ErrorState>{fetchState.error}</ErrorState>
+          ) : null}
+          {selectedSessionId === undefined ? (
+            <EmptyState>Select a session to inspect its JSONL.</EmptyState>
+          ) : records.length === 0 ? (
+            <EmptyState>Waiting for session records...</EmptyState>
+          ) : (
+            <pre className="jsonlBlock">{recordsToJsonl(records)}</pre>
+          )}
         </div>
       </div>
-      {fetchState.status === 'error' ? (
-        <ErrorState>{fetchState.error}</ErrorState>
-      ) : null}
-      {records.length === 0 ? (
-        <EmptyState>Waiting for session records...</EmptyState>
-      ) : (
-        <pre className="jsonlBlock">{recordsToJsonl(records)}</pre>
-      )}
     </section>
   );
 }
@@ -1585,9 +2063,54 @@ function AgentTranscript({
   );
 }
 
-function AgentRunView({ view }: { view: AgentViewState }) {
+function AgentReadyState({ form }: { form: AgentFormState }) {
+  const model = form.model.trim() === '' ? 'env OPENAI_MODEL' : form.model;
+  const taskPreview = form.task.trim();
+
+  return (
+    <section className="focusReadyState">
+      <div className="focusReadyPanel">
+        <span className="focusReadyEyebrow">Agent ready</span>
+        <h2>Working session</h2>
+        <p>{taskPreview}</p>
+        <div className="focusReadyMeta">
+          <span>{model}</span>
+          <span>{form.approvalPolicy}</span>
+          <span>{form.sandboxMode}</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ChatReadyState({ form }: { form: ChatFormState }) {
+  const model = form.model.trim() === '' ? 'env OPENAI_MODEL' : form.model;
+  const messagePreview = form.message.trim();
+
+  return (
+    <section className="focusReadyState">
+      <div className="focusReadyPanel">
+        <span className="focusReadyEyebrow">Model ready</span>
+        <h2>Direct model call</h2>
+        <p>{messagePreview}</p>
+        <div className="focusReadyMeta">
+          <span>{model}</span>
+          <span>temperature {form.temperature}</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AgentRunView({
+  view,
+  form,
+}: {
+  view: AgentViewState;
+  form: AgentFormState;
+}) {
   if (view.status === 'idle') {
-    return <EmptyState>Agent result will appear here.</EmptyState>;
+    return <AgentReadyState form={form} />;
   }
 
   if (view.status === 'error') {
@@ -1619,7 +2142,7 @@ function AgentRunView({ view }: { view: AgentViewState }) {
   );
 }
 
-function AgentResultView({
+function AgentInspectorView({
   view,
   page,
 }: {
@@ -1628,7 +2151,7 @@ function AgentResultView({
 }) {
   if (page === 'debug') {
     if (view.status === 'idle') {
-      return <EmptyState>Debug events will appear here.</EmptyState>;
+      return <WorkbenchEmptyState title="No runtime events yet" />;
     }
 
     return (
@@ -1641,6 +2164,18 @@ function AgentResultView({
     );
   }
 
+  if (page === 'audit') {
+    if (view.status === 'idle') {
+      return <WorkbenchEmptyState title="No permission decisions yet" />;
+    }
+
+    return (
+      <div className="resultStack">
+        <AgentAuditConsole events={agentViewDebugEvents(view)} />
+      </div>
+    );
+  }
+
   if (page === 'session') {
     return (
       <div className="resultStack">
@@ -1648,13 +2183,17 @@ function AgentResultView({
       </div>
     );
   }
-
-  return <AgentRunView view={view} />;
 }
 
-function ChatResultView({ view }: { view: ChatViewState }) {
+function ChatResultView({
+  view,
+  form,
+}: {
+  view: ChatViewState;
+  form: ChatFormState;
+}) {
   if (view.status === 'idle') {
-    return <EmptyState>Response will appear here.</EmptyState>;
+    return <ChatReadyState form={form} />;
   }
 
   if (view.status === 'submitting') {
@@ -1676,33 +2215,113 @@ function ChatResultView({ view }: { view: ChatViewState }) {
   );
 }
 
-function ResultPanel({
-  mode,
-  agentPage,
-  chatView,
-  agentView,
-  onAgentPageChange,
-}: ResultPanelProps) {
+function SessionRail({
+  activeRunId,
+  onOpenSessions,
+}: {
+  activeRunId: string | undefined;
+  onOpenSessions: () => void;
+}) {
+  const [listFetchState, setListFetchState] =
+    useState<AgentSessionListFetchState>({
+      status: 'idle',
+      sessions: [],
+      error: null,
+    });
+
+  useEffect(() => {
+    let cancelled = false;
+    setListFetchState((current) => ({
+      status: 'loading',
+      sessions: current.sessions,
+      error: null,
+    }));
+
+    fetchAgentSessionSummaries()
+      .then((sessions) => {
+        if (cancelled) {
+          return;
+        }
+
+        setListFetchState({
+          status: 'success',
+          sessions: sessions.slice(0, 7),
+          error: null,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setListFetchState((current) => ({
+          status: 'error',
+          sessions: current.sessions,
+          error:
+            error instanceof Error ? error.message : 'Session list load failed',
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRunId]);
+
   return (
-    <section className="workspacePanel resultPanel" aria-live="polite">
-      <div className="panelHeader">
-        <div>
-          <span className="panelKicker">Output</span>
-          <h2>{mode === 'agent' ? 'Agent run' : 'Chat completion'}</h2>
-        </div>
-        {mode === 'agent' ? (
-          <AgentPageSwitcher
-            page={agentPage}
-            onPageChange={onAgentPageChange}
-          />
-        ) : null}
+    <section className="sidebarSection">
+      <div className="sidebarSectionHeader">
+        <span>Sessions</span>
+        <button type="button" onClick={onOpenSessions}>
+          View all
+        </button>
       </div>
-      {mode === 'agent' ? (
-        <AgentResultView view={agentView} page={agentPage} />
+      {listFetchState.status === 'error' ? (
+        <p className="sidebarNotice">{listFetchState.error}</p>
+      ) : null}
+      {listFetchState.sessions.length === 0 ? (
+        <p className="sidebarNotice">No saved runs yet.</p>
       ) : (
-        <ChatResultView view={chatView} />
+        <div className="sidebarSessionList">
+          {listFetchState.sessions.map((session) => (
+            <button
+              className={
+                session.id === activeRunId
+                  ? 'sidebarSessionButton activeSidebarSessionButton'
+                  : 'sidebarSessionButton'
+              }
+              key={session.id}
+              type="button"
+              onClick={onOpenSessions}
+            >
+              <span>{session.model}</span>
+              <strong>{sessionShortId(session.id)}</strong>
+              <small>
+                {session.approvalPolicy} / {session.sandboxMode}
+              </small>
+            </button>
+          ))}
+        </div>
       )}
     </section>
+  );
+}
+
+function AgentInspectorPanel({
+  agentPage,
+  agentView,
+  onAgentPageChange,
+}: AgentInspectorPanelProps) {
+  return (
+    <aside className="inspectorColumn" aria-live="polite">
+      <div className="inspectorHeader">
+        <div>
+          <span className="panelKicker">Inspector</span>
+          <h2>Run internals</h2>
+        </div>
+        <AgentPageSwitcher page={agentPage} onPageChange={onAgentPageChange} />
+      </div>
+      <AgentInspectorView view={agentView} page={agentPage} />
+    </aside>
   );
 }
 
@@ -1753,6 +2372,8 @@ export function ChatPlayground() {
           context: optionalText(state.agentForm.context),
           model: optionalText(state.agentForm.model),
           temperature: optionalText(state.agentForm.temperature),
+          approvalPolicy: state.agentForm.approvalPolicy,
+          sandboxMode: state.agentForm.sandboxMode,
         },
         {
           onStep: (event) => {
@@ -1844,39 +2465,80 @@ export function ChatPlayground() {
     dispatch({ type: 'agentRunAborted' });
   }
 
-  return (
-    <main className="appShell">
-      <header className="topBar">
-        <div>
-          <span className="productLabel">Next.js API Workbench</span>
-          <h1>Model Backend</h1>
-        </div>
-        <div className="runMeta">
-          <span>{modelLabel(state.mode, state)}</span>
-          <strong>
-            {statusText(state.mode, state.chatView, state.agentView)}
-          </strong>
-        </div>
-      </header>
+  const currentRunId = agentRunId(state.agentView);
 
-      <section className="workspaceGrid">
-        <section className="workspacePanel requestPanel">
-          <div className="panelHeader">
+  return (
+    <main className="appShell agentWorkbench">
+      <aside className="workbenchSidebar">
+        <div className="sidebarBrand">
+          <span className="productLabel">Next.js API Workbench</span>
+          <h1>Agent Harness</h1>
+        </div>
+        <ModeSwitcher
+          mode={state.mode}
+          onModeChange={(mode) =>
+            dispatch({
+              type: 'modeChanged',
+              mode: mode,
+            })
+          }
+        />
+        <section className="sidebarSection">
+          <div className="sidebarSectionHeader">
+            <span>Current run</span>
+          </div>
+          <div className="sidebarRunCard">
+            <strong>
+              {statusText(state.mode, state.chatView, state.agentView)}
+            </strong>
+            <span>{modelLabel(state.mode, state)}</span>
+            <small>{currentRunId ?? 'no run id yet'}</small>
+          </div>
+        </section>
+        <SessionRail
+          activeRunId={currentRunId}
+          onOpenSessions={() =>
+            dispatch({
+              type: 'agentPageChanged',
+              page: 'session',
+            })
+          }
+        />
+      </aside>
+
+      <section className="conversationColumn">
+        <header className="conversationHeader">
+          <div>
+            <span className="panelKicker">
+              {state.mode === 'agent' ? 'Agent transcript' : 'Chat completion'}
+            </span>
+            <h2>
+              {state.mode === 'agent' ? 'Working session' : 'Direct model call'}
+            </h2>
+          </div>
+          <div className="runMeta">
+            <span>{modelLabel(state.mode, state)}</span>
+            <strong>
+              {statusText(state.mode, state.chatView, state.agentView)}
+            </strong>
+          </div>
+        </header>
+        <div className="conversationScroll" aria-live="polite">
+          {state.mode === 'agent' ? (
+            <AgentRunView view={state.agentView} form={state.agentForm} />
+          ) : (
+            <ChatResultView view={state.chatView} form={state.chatForm} />
+          )}
+        </div>
+        <div className="composerDock">
+          <div className="composerHeader">
             <div>
               <span className="panelKicker">Request</span>
-              <h2>{state.mode === 'agent' ? 'Agent' : 'Chat'}</h2>
+              <h3>
+                {state.mode === 'agent' ? 'Ask the agent' : 'Ask the model'}
+              </h3>
             </div>
-            <ModeSwitcher
-              mode={state.mode}
-              onModeChange={(mode) =>
-                dispatch({
-                  type: 'modeChanged',
-                  mode: mode,
-                })
-              }
-            />
           </div>
-
           {state.mode === 'agent' ? (
             <AgentForm
               form={state.agentForm}
@@ -1914,6 +2576,18 @@ export function ChatPlayground() {
                   value: value,
                 })
               }
+              onApprovalPolicyChange={(value) =>
+                dispatch({
+                  type: 'agentApprovalPolicyChanged',
+                  value: value,
+                })
+              }
+              onSandboxModeChange={(value) =>
+                dispatch({
+                  type: 'agentSandboxModeChanged',
+                  value: value,
+                })
+              }
             />
           ) : (
             <ChatForm
@@ -1941,12 +2615,12 @@ export function ChatPlayground() {
               }
             />
           )}
-        </section>
+        </div>
+      </section>
 
-        <ResultPanel
-          mode={state.mode}
+      {state.mode === 'agent' ? (
+        <AgentInspectorPanel
           agentPage={state.agentPage}
-          chatView={state.chatView}
           agentView={state.agentView}
           onAgentPageChange={(page) =>
             dispatch({
@@ -1955,7 +2629,32 @@ export function ChatPlayground() {
             })
           }
         />
-      </section>
+      ) : (
+        <aside className="inspectorColumn chatInspector">
+          <div className="inspectorHeader">
+            <div>
+              <span className="panelKicker">Inspector</span>
+              <h2>Chat call</h2>
+            </div>
+          </div>
+          <div className="resultStack">
+            <section className="debugPanel">
+              <div className="debugSummaryGrid">
+                <div>
+                  <span className="debugLabel">Model</span>
+                  <strong>{modelLabel(state.mode, state)}</strong>
+                </div>
+                <div>
+                  <span className="debugLabel">Status</span>
+                  <strong>
+                    {statusText(state.mode, state.chatView, state.agentView)}
+                  </strong>
+                </div>
+              </div>
+            </section>
+          </div>
+        </aside>
+      )}
     </main>
   );
 }
