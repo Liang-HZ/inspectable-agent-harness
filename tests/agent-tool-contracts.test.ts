@@ -14,9 +14,10 @@ import {
   agentToolDefinitions,
   agentToolGroups,
   agentTools,
+  getAgentToolsForRunPolicy,
 } from '../lib/agent-tools';
 
-test('tool groups expose current builtin surface and empty future groups', () => {
+test('tool groups expose current builtin surface', () => {
   assert.deepEqual(
     agentToolGroups.map((group) => group.name),
     [
@@ -45,7 +46,7 @@ test('tool groups expose current builtin surface and empty future groups', () =>
     'find',
     'ls',
   ]);
-  assert.deepEqual(toolsByGroup.editing_builtins, []);
+  assert.deepEqual(toolsByGroup.editing_builtins, ['write', 'edit']);
   assert.deepEqual(toolsByGroup.shell_builtins, []);
 });
 
@@ -70,6 +71,20 @@ test('current tool definitions declare runtime metadata explicitly', () => {
     assert.equal(toolDefinition?.annotations.readOnly, true);
     assert.equal(toolDefinition?.annotations.destructive, false);
   }
+
+  for (const toolName of ['write', 'edit']) {
+    const toolDefinition = toolsByName.get(toolName);
+    assert.notEqual(toolDefinition, undefined);
+    assert.equal(toolDefinition?.source, 'builtin');
+    assert.equal(toolDefinition?.group, 'editing_builtins');
+    assert.equal(toolDefinition?.category, 'write');
+    assert.equal(toolDefinition?.executionMode, 'sequential');
+    assert.equal(toolDefinition?.timeoutMs, 10_000);
+    assert.equal(toolDefinition?.abortable, true);
+    assert.equal(toolDefinition?.pathAccess.type, 'current_project');
+    assert.equal(toolDefinition?.annotations.readOnly, false);
+    assert.equal(toolDefinition?.annotations.destructive, true);
+  }
 });
 
 test('provider-visible tools do not include runtime metadata', () => {
@@ -86,6 +101,24 @@ test('provider-visible tools do not include runtime metadata', () => {
       'schemaStrict',
     ]);
   }
+});
+
+test('provider-visible editing tools depend on run sandbox mode', () => {
+  assert.deepEqual(
+    getAgentToolsForRunPolicy({
+      approvalPolicy: 'on_request',
+      sandboxMode: 'read_only',
+    }).map((tool) => tool.name),
+    ['read', 'grep', 'find', 'ls'],
+  );
+
+  assert.deepEqual(
+    getAgentToolsForRunPolicy({
+      approvalPolicy: 'on_request',
+      sandboxMode: 'workspace_write',
+    }).map((tool) => tool.name),
+    ['read', 'grep', 'find', 'ls', 'write', 'edit'],
+  );
 });
 
 test('path access policies enforce current project and allowed roots', () => {
@@ -113,7 +146,8 @@ test('path access policies enforce current project and allowed roots', () => {
     allowedRootsPolicy,
   );
   assert.throws(
-    () => assertAgentPathAllowedByPolicy(projectPackagePath, allowedRootsPolicy),
+    () =>
+      assertAgentPathAllowedByPolicy(projectPackagePath, allowedRootsPolicy),
     AgentToolRespondToModelError,
   );
 
@@ -129,6 +163,9 @@ test('relative path resolution follows the active path policy base', () => {
   ]);
   const resolved = resolveAgentToolPath('fixtures', allowedRootsPolicy);
 
-  assert.equal(resolved.absolutePath, path.join(process.cwd(), 'tests/fixtures'));
+  assert.equal(
+    resolved.absolutePath,
+    path.join(process.cwd(), 'tests/fixtures'),
+  );
   assert.equal(resolved.displayPath, 'fixtures');
 });

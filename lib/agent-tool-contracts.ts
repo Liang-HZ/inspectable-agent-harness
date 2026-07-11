@@ -24,6 +24,8 @@ export type AgentToolExecutionMode = 'sequential' | 'parallel';
 
 export type AgentToolPermissionInput = {
   pathArgumentName?: string;
+  recordsReadPath?: boolean;
+  requiresPriorRead?: boolean;
 };
 
 export type AgentToolResult = {

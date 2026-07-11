@@ -160,6 +160,7 @@ function createBuiltinReadOnlyToolBase(category: AgentToolCategory) {
     pathAccess: currentProjectPathAccessPolicy,
     permissionInput: {
       pathArgumentName: 'path',
+      recordsReadPath: category === 'read',
     },
   } satisfies Pick<
     AgentToolDefinition,
@@ -419,10 +420,7 @@ async function resolveBuiltinToolPath(
   inputPath: string | undefined,
   pathAccess: AgentToolRuntimeContext['pathAccess'],
 ) {
-  const unresolvedPath = resolveAgentToolPath(
-    inputPath,
-    pathAccess,
-  );
+  const unresolvedPath = resolveAgentToolPath(inputPath, pathAccess);
 
   let realAbsolutePath: string;
   try {
@@ -436,17 +434,11 @@ async function resolveBuiltinToolPath(
     );
   }
 
-  assertAgentPathAllowedByPolicy(
-    realAbsolutePath,
-    pathAccess,
-  );
+  assertAgentPathAllowedByPolicy(realAbsolutePath, pathAccess);
 
   return {
     absolutePath: realAbsolutePath,
-    displayPath: displayAgentToolPath(
-      realAbsolutePath,
-      pathAccess,
-    ),
+    displayPath: displayAgentToolPath(realAbsolutePath, pathAccess),
   } satisfies ResolvedAgentToolPath;
 }
 
@@ -467,9 +459,7 @@ async function assertFile(pathInfo: ResolvedAgentToolPath): Promise<void> {
   }
 }
 
-async function assertDirectory(
-  pathInfo: ResolvedAgentToolPath,
-): Promise<void> {
+async function assertDirectory(pathInfo: ResolvedAgentToolPath): Promise<void> {
   const pathStat = await stat(
     /* turbopackIgnore: true */ pathInfo.absolutePath,
   );
@@ -872,10 +862,7 @@ async function runRipgrep(
     }
 
     matches.push({
-      path: displayAgentToolPath(
-        absoluteMatchPath,
-        pathAccess,
-      ),
+      path: displayAgentToolPath(absoluteMatchPath, pathAccess),
       lineNumber: lineNumber,
       line: lineText.replace(/\r?\n$/, ''),
     });

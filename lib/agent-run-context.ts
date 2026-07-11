@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import {
   DEFAULT_AGENT_RUN_POLICY,
   type AgentRunPolicy,
@@ -13,6 +15,11 @@ export type AgentRunContext = {
   runId: string;
   signal: AbortSignal | undefined;
   policy: AgentRunPolicy;
+  toolState: AgentRunToolState;
+};
+
+export type AgentRunToolState = {
+  readFilePaths: Set<string>;
 };
 
 export function createAgentRunContext(
@@ -30,6 +37,9 @@ export function createAgentRunContext(
     runId: input.runId,
     signal: input.signal,
     policy: policy,
+    toolState: {
+      readFilePaths: new Set<string>(),
+    },
   };
 }
 
@@ -37,4 +47,26 @@ export function assertAgentRunNotAborted(context: AgentRunContext): void {
   if (context.signal?.aborted) {
     throw new Error('Agent run aborted.');
   }
+}
+
+function normalizeAgentToolStatePath(absolutePath: string): string {
+  return path.resolve(absolutePath);
+}
+
+export function markAgentFileRead(
+  context: AgentRunContext,
+  absolutePath: string,
+): void {
+  context.toolState.readFilePaths.add(
+    normalizeAgentToolStatePath(absolutePath),
+  );
+}
+
+export function hasAgentFileReadRecord(
+  context: AgentRunContext,
+  absolutePath: string,
+): boolean {
+  return context.toolState.readFilePaths.has(
+    normalizeAgentToolStatePath(absolutePath),
+  );
 }

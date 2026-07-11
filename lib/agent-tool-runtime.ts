@@ -8,7 +8,12 @@ import {
   type AgentPermissionRequest,
 } from './agent-permissions';
 import type { AgentRunContext } from './agent-run-context';
-import { assertAgentRunNotAborted } from './agent-run-context';
+import {
+  assertAgentRunNotAborted,
+  hasAgentFileReadRecord,
+  markAgentFileRead,
+} from './agent-run-context';
+import { decideAgentToolPathAccess } from './agent-path-policy';
 import {
   AgentToolFatalError,
   createRespondToModelToolOutput,
@@ -66,10 +71,19 @@ function createPermissionRequest(
   context: AgentRunContext,
 ): AgentPermissionRequest {
   const pathArgumentName = toolDefinition.permissionInput?.pathArgumentName;
+  const requestedPath = readPermissionPathArgument(toolCall, pathArgumentName);
   const pathAccess = resolveAgentPathAccessForRunPolicy(
     toolDefinition.pathAccess,
     context.policy.sandboxMode,
   );
+  const pathDecision =
+    requestedPath === undefined
+      ? undefined
+      : decideAgentToolPathAccess(requestedPath, pathAccess);
+  const resolvedPath =
+    pathDecision?.type === 'allow' ? pathDecision.path.absolutePath : undefined;
+  const requiresPriorRead =
+    toolDefinition.permissionInput?.requiresPriorRead === true;
 
   return {
     toolCallId: toolCall.id,
@@ -82,7 +96,14 @@ function createPermissionRequest(
     declaredPathAccess: toolDefinition.pathAccess,
     pathAccess: pathAccess,
     pathArgumentName: pathArgumentName,
-    requestedPath: readPermissionPathArgument(toolCall, pathArgumentName),
+    requestedPath: requestedPath,
+    resolvedPath: resolvedPath,
+    recordsReadPath: toolDefinition.permissionInput?.recordsReadPath === true,
+    requiresPriorRead: requiresPriorRead,
+    priorReadSatisfied:
+      resolvedPath === undefined
+        ? undefined
+        : hasAgentFileReadRecord(context, resolvedPath),
     executionMode: toolDefinition.executionMode,
     approvalPolicy: context.policy.approvalPolicy,
     sandboxMode: context.policy.sandboxMode,
@@ -271,6 +292,26 @@ function createToolExecution(
   };
 }
 
+function recordToolStateAfterSuccessfulExecution(
+  context: AgentRunContext,
+  request: AgentPermissionRequest,
+  execution: AgentToolExecution,
+): void {
+  if (execution.isError) {
+    return;
+  }
+
+  if (!request.recordsReadPath) {
+    return;
+  }
+
+  if (request.resolvedPath === undefined) {
+    return;
+  }
+
+  markAgentFileRead(context, request.resolvedPath);
+}
+
 export async function executeAgentToolCall(
   toolCall: AgentModelToolCall,
   context: AgentRunContext,
@@ -368,6 +409,11 @@ export async function executeAgentToolCall(
     );
   }
 
+  recordToolStateAfterSuccessfulExecution(
+    context,
+    permissionRequest,
+    execution,
+  );
   callbacks.onEvent?.(createToolFinishedEvent(execution));
 
   return execution;

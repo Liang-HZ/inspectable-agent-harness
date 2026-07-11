@@ -1,4 +1,7 @@
 import { builtinReadOnlyToolDefinitions } from './agent-builtins';
+import { builtinEditingToolDefinitions as editingBuiltinDefinitions } from './agent-editing-builtins';
+import type { AgentModelToolDefinition } from './agent-model-types';
+import type { AgentRunPolicy } from './agent-permissions';
 import {
   toolDefinitionsToModelTools,
   type AgentToolDefinition,
@@ -18,7 +21,8 @@ export type {
 
 export const builtinUtilityToolDefinitions: AgentToolDefinition[] = [];
 
-export const builtinEditingToolDefinitions: AgentToolDefinition[] = [];
+export const builtinEditingToolDefinitions: AgentToolDefinition[] =
+  editingBuiltinDefinitions;
 
 export const builtinShellToolDefinitions: AgentToolDefinition[] = [];
 
@@ -55,4 +59,38 @@ export const agentToolRegistry = new Map<string, AgentToolDefinition>(
   ]),
 );
 
-export const agentTools = toolDefinitionsToModelTools(agentToolDefinitions);
+function isToolVisibleForRunPolicy(
+  toolDefinition: AgentToolDefinition,
+  policy: AgentRunPolicy,
+): boolean {
+  if (toolDefinition.group === 'editing_builtins') {
+    return policy.sandboxMode !== 'read_only';
+  }
+
+  if (toolDefinition.group === 'shell_builtins') {
+    return policy.sandboxMode !== 'read_only';
+  }
+
+  return true;
+}
+
+export function getAgentToolDefinitionsForRunPolicy(
+  policy: AgentRunPolicy,
+): AgentToolDefinition[] {
+  return agentToolDefinitions.filter((toolDefinition) =>
+    isToolVisibleForRunPolicy(toolDefinition, policy),
+  );
+}
+
+export function getAgentToolsForRunPolicy(
+  policy: AgentRunPolicy,
+): AgentModelToolDefinition[] {
+  return toolDefinitionsToModelTools(
+    getAgentToolDefinitionsForRunPolicy(policy),
+  );
+}
+
+export const agentTools = getAgentToolsForRunPolicy({
+  approvalPolicy: 'on_request',
+  sandboxMode: 'read_only',
+});

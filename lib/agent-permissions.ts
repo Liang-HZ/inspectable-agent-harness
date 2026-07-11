@@ -51,6 +51,10 @@ export type AgentPermissionRequest = {
   pathAccess: AgentToolPathAccessPolicy;
   pathArgumentName: string | undefined;
   requestedPath: string | undefined;
+  resolvedPath: string | undefined;
+  recordsReadPath: boolean;
+  requiresPriorRead: boolean;
+  priorReadSatisfied: boolean | undefined;
   executionMode: AgentToolExecutionMode;
   approvalPolicy: AgentApprovalPolicy;
   sandboxMode: AgentSandboxMode;
@@ -161,6 +165,10 @@ function decideRequestedPathAccess(
     return undefined;
   }
 
+  if (request.requestedPath === undefined) {
+    return undefined;
+  }
+
   const pathDecision = decideAgentToolPathAccess(
     request.requestedPath,
     request.pathAccess,
@@ -178,6 +186,64 @@ function decideRequestedPathAccess(
   };
 }
 
+function decidePriorReadRequirement(
+  request: AgentPermissionRequest,
+): AgentPermissionDecision | undefined {
+  if (!request.requiresPriorRead) {
+    return undefined;
+  }
+
+  if (request.resolvedPath === undefined) {
+    return undefined;
+  }
+
+  if (request.priorReadSatisfied === true) {
+    return undefined;
+  }
+
+  return {
+    type: 'deny',
+    source: 'policy',
+    errorCode: 'EDIT_REQUIRES_READ',
+    reason:
+      'Read the target file first with the read tool before editing it. This protects against editing stale or unseen content.',
+  };
+}
+
+function decideWritableToolPolicy(
+  request: AgentPermissionRequest,
+): AgentPermissionDecision | undefined {
+  if (request.category !== 'write') {
+    return undefined;
+  }
+
+  if (request.sandboxMode === 'read_only') {
+    return {
+      type: 'deny',
+      source: 'policy',
+      errorCode: 'PERMISSION_DENIED',
+      reason:
+        'This run is configured as read-only, so write-capable tools cannot execute.',
+    };
+  }
+
+  if (request.approvalPolicy === 'strict') {
+    return {
+      type: 'ask',
+      source: 'policy',
+      reason:
+        'Strict approval policy requires approval before write-capable tools execute.',
+    };
+  }
+
+  return {
+    type: 'allow',
+    source: 'policy',
+    reason:
+      'Workspace write mode allows write-capable built-in tools after path and tool-specific preconditions pass.',
+  };
+}
+
 export function decideAgentToolPermission(
   request: AgentPermissionRequest,
 ): AgentPermissionDecision {
@@ -185,6 +251,18 @@ export function decideAgentToolPermission(
 
   if (pathDecision !== undefined) {
     return pathDecision;
+  }
+
+  const priorReadDecision = decidePriorReadRequirement(request);
+
+  if (priorReadDecision !== undefined) {
+    return priorReadDecision;
+  }
+
+  const writableToolDecision = decideWritableToolPolicy(request);
+
+  if (writableToolDecision !== undefined) {
+    return writableToolDecision;
   }
 
   if (request.approvalPolicy === 'never') {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
@@ -39,6 +39,13 @@ async function executeBuiltinTool(name: string, args: Record<string, unknown>) {
     createToolCall(name, args),
     createAgentRunContext({ runId: `test-${name}` }),
   );
+}
+
+async function createProjectTempDirectory(prefix: string): Promise<string> {
+  const root = path.join(process.cwd(), '.tmp-agent-tests');
+  await mkdir(root, { recursive: true });
+
+  return mkdtemp(path.join(root, prefix));
 }
 
 function readResultObject(value: unknown): Record<string, unknown> {
@@ -220,6 +227,265 @@ test('risky tools request approval and fail closed until approval resume exists'
     );
   } finally {
     agentToolRegistry.delete(toolDefinition.name);
+  }
+});
+
+test('write creates parent directories and returns a diff under workspace write', async () => {
+  const tempDirectory = await createProjectTempDirectory('write-');
+  const targetPath = path.join(tempDirectory, 'nested', 'created.txt');
+
+  try {
+    const execution = await executeAgentToolCall(
+      createToolCall('write', {
+        path: targetPath,
+        content: 'hello from write\n',
+      }),
+      createAgentRunContext({
+        runId: 'test-write-create',
+        policy: {
+          approvalPolicy: 'on_request',
+          sandboxMode: 'workspace_write',
+        },
+      }),
+    );
+
+    assert.equal(execution.isError, false);
+    assert.match(execution.modelOutput, /Successfully wrote/);
+    assert.match(execution.modelOutput, /Diff:/);
+    assert.equal(await readFile(targetPath, 'utf8'), 'hello from write\n');
+    const details = readResultObject(execution.output.details);
+    assert.equal(details.path, path.relative(process.cwd(), targetPath));
+    assert.match(String(details.diff), /\+hello from write/);
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('workspace write denies project-outside write before tool execution', async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'agent-write-deny-'));
+  const targetPath = path.join(tempDirectory, 'outside.txt');
+  const events: AgentEvent[] = [];
+
+  try {
+    const execution = await executeAgentToolCall(
+      createToolCall('write', {
+        path: targetPath,
+        content: 'should not write\n',
+      }),
+      createAgentRunContext({
+        runId: 'test-write-deny',
+        policy: {
+          approvalPolicy: 'on_request',
+          sandboxMode: 'workspace_write',
+        },
+      }),
+      {
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    assert.equal(execution.isError, true);
+    assert.equal(execution.output.type, 'respond_to_model');
+    assert.equal(execution.output.error.code, 'PATH_OUTSIDE_ALLOWED_ROOT');
+    assert.equal(
+      events.some((event) => event.type === 'tool_started'),
+      false,
+    );
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('read-only policy denies write before tool execution', async () => {
+  const tempDirectory = await createProjectTempDirectory('write-read-only-');
+  const targetPath = path.join(tempDirectory, 'blocked.txt');
+  const events: AgentEvent[] = [];
+
+  try {
+    const execution = await executeAgentToolCall(
+      createToolCall('write', {
+        path: targetPath,
+        content: 'should not write\n',
+      }),
+      createAgentRunContext({
+        runId: 'test-write-read-only',
+        policy: {
+          approvalPolicy: 'on_request',
+          sandboxMode: 'read_only',
+        },
+      }),
+      {
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    assert.equal(execution.isError, true);
+    assert.equal(execution.output.type, 'respond_to_model');
+    assert.equal(execution.output.error.code, 'PERMISSION_DENIED');
+    assert.equal(
+      events.some((event) => event.type === 'tool_started'),
+      false,
+    );
+    await assert.rejects(() => readFile(targetPath, 'utf8'));
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('edit requires a successful prior read of the target file', async () => {
+  const tempDirectory = await createProjectTempDirectory('edit-gate-');
+  const targetPath = path.join(tempDirectory, 'target.txt');
+  const events: AgentEvent[] = [];
+
+  try {
+    await writeFile(targetPath, 'alpha\nbeta\n', 'utf8');
+
+    const execution = await executeAgentToolCall(
+      createToolCall('edit', {
+        path: targetPath,
+        edits: [{ oldText: 'beta', newText: 'gamma' }],
+      }),
+      createAgentRunContext({
+        runId: 'test-edit-requires-read',
+        policy: {
+          approvalPolicy: 'on_request',
+          sandboxMode: 'workspace_write',
+        },
+      }),
+      {
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    assert.equal(execution.isError, true);
+    assert.equal(execution.output.type, 'respond_to_model');
+    assert.equal(execution.output.error.code, 'EDIT_REQUIRES_READ');
+    assert.match(execution.modelOutput, /Read the target file first/);
+    assert.equal(await readFile(targetPath, 'utf8'), 'alpha\nbeta\n');
+    assert.equal(
+      events.some((event) => event.type === 'tool_started'),
+      false,
+    );
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('edit succeeds after read and returns a diff', async () => {
+  const tempDirectory = await createProjectTempDirectory('edit-');
+  const targetPath = path.join(tempDirectory, 'target.txt');
+  const context = createAgentRunContext({
+    runId: 'test-edit-after-read',
+    policy: {
+      approvalPolicy: 'on_request',
+      sandboxMode: 'workspace_write',
+    },
+  });
+
+  try {
+    await writeFile(targetPath, 'alpha\nbeta\n', 'utf8');
+
+    const readExecution = await executeAgentToolCall(
+      createToolCall('read', {
+        path: targetPath,
+      }),
+      context,
+    );
+    const editExecution = await executeAgentToolCall(
+      createToolCall('edit', {
+        path: targetPath,
+        edits: [{ oldText: 'beta', newText: 'gamma' }],
+      }),
+      context,
+    );
+
+    assert.equal(readExecution.isError, false);
+    assert.equal(editExecution.isError, false);
+    assert.equal(await readFile(targetPath, 'utf8'), 'alpha\ngamma\n');
+    assert.match(editExecution.modelOutput, /Successfully edited/);
+    assert.match(editExecution.modelOutput, /Diff:/);
+    const details = readResultObject(editExecution.output.details);
+    assert.match(String(details.diff), /-beta/);
+    assert.match(String(details.diff), /\+gamma/);
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('edit validates every replacement before writing the file', async () => {
+  const tempDirectory = await createProjectTempDirectory('edit-atomic-');
+  const targetPath = path.join(tempDirectory, 'target.txt');
+  const context = createAgentRunContext({
+    runId: 'test-edit-atomic',
+    policy: {
+      approvalPolicy: 'on_request',
+      sandboxMode: 'workspace_write',
+    },
+  });
+
+  try {
+    await writeFile(targetPath, 'one\ntwo\nthree\n', 'utf8');
+    await executeAgentToolCall(
+      createToolCall('read', {
+        path: targetPath,
+      }),
+      context,
+    );
+
+    const execution = await executeAgentToolCall(
+      createToolCall('edit', {
+        path: targetPath,
+        edits: [
+          { oldText: 'one', newText: 'ONE' },
+          { oldText: 'missing', newText: 'MISSING' },
+        ],
+      }),
+      context,
+    );
+
+    assert.equal(execution.isError, true);
+    assert.equal(execution.output.type, 'respond_to_model');
+    assert.equal(execution.output.error.code, 'EDIT_TARGET_NOT_FOUND');
+    assert.equal(await readFile(targetPath, 'utf8'), 'one\ntwo\nthree\n');
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('edit rejects non-unique replacement targets before writing the file', async () => {
+  const tempDirectory = await createProjectTempDirectory('edit-non-unique-');
+  const targetPath = path.join(tempDirectory, 'target.txt');
+  const context = createAgentRunContext({
+    runId: 'test-edit-non-unique',
+    policy: {
+      approvalPolicy: 'on_request',
+      sandboxMode: 'workspace_write',
+    },
+  });
+
+  try {
+    await writeFile(targetPath, 'aaa\n', 'utf8');
+    await executeAgentToolCall(
+      createToolCall('read', {
+        path: targetPath,
+      }),
+      context,
+    );
+
+    const execution = await executeAgentToolCall(
+      createToolCall('edit', {
+        path: targetPath,
+        edits: [{ oldText: 'aa', newText: 'AA' }],
+      }),
+      context,
+    );
+
+    assert.equal(execution.isError, true);
+    assert.equal(execution.output.type, 'respond_to_model');
+    assert.equal(execution.output.error.code, 'EDIT_TARGET_NOT_UNIQUE');
+    assert.equal(await readFile(targetPath, 'utf8'), 'aaa\n');
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
   }
 });
 
@@ -461,8 +727,8 @@ function createRiskyToolDefinition(name: string): AgentToolDefinition {
   return {
     name: name,
     source: 'builtin',
-    group: 'editing_builtins',
-    category: 'write',
+    group: 'shell_builtins',
+    category: 'shell',
     annotations: {
       readOnly: false,
       destructive: true,
