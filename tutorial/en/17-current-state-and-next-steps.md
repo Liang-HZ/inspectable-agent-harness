@@ -7,7 +7,7 @@ judgment based on the current boundaries.
 After reading this chapter, you should understand:
 
 - which agent foundations are already real
-- why sandbox, write/edit, shell, and approval resume are still missing
+- why sandbox, shell, approval resume, and deeper editing safety are still missing
 - why session replay and context compaction are likely future pressure points
 - how future tutorial chapters should stay maintainable
 
@@ -30,12 +30,15 @@ The project now has a real inspectable agent harness foundation:
 - assistant commit semantics
 - deterministic runtime tests
 - read-only tools: `ls`, `find`, `grep`, `read`
+- editing tools v1: `write`, `edit`
+- read-before-edit runtime precondition
 - path policy boundary
 - tool runtime boundary
 - permission skeleton with path-policy hardening
+- run policy request contract and frontend controls
 - structured tool output contract
-- Debug Console
-- JSONL session store and viewer
+- Debug Console with permission audit
+- JSONL session store and browser
 - tool source/group/path/execution contract
 - unlimited loop with repeated-call guard
 
@@ -61,13 +64,20 @@ external sandbox
 
 ### Write/Edit
 
-Write/edit should not be simple file writes. They need:
+Write/edit now exists as a first real editing layer:
 
 - diff-oriented output
-- approval decisions
-- conflict behavior
 - clear failure messages
 - tests around partial changes
+- exact replacement validation before writing
+- read-before-edit enforcement in the runtime
+
+What is still missing is the deeper production layer:
+
+- interactive approval/resume for edits that need a human decision
+- richer conflict behavior when files change between read and edit
+- stronger concurrency control around multiple write-capable calls
+- OS-level sandbox enforcement below the runtime path policy
 
 ### Shell
 
@@ -147,8 +157,8 @@ and tests already form an extensible skeleton.
 
 Sandbox is important, but "sandbox" has layers. The project now has
 pre-execution permission decisions and path-policy hardening. OS sandboxing,
-approval resume, write/edit, shell, session replay, or telemetry can each be the
-right next step depending on what needs validation.
+approval resume, deeper editing safety, shell, session replay, or telemetry can
+each be the right next step depending on what needs validation.
 
 ### Misunderstanding 3: An Open-Source Tutorial Only Needs Final Code
 
@@ -159,6 +169,7 @@ than as an internal retrospective.
 ## Chapter Summary
 
 The project already has the foundation of a real agent harness: model loop,
-streaming, real read-only tools, provider dialects, session records, and debug
-surfaces. Future work should follow the same rule: define the boundary,
-implement the capability, then lock it down with tests and tutorial updates.
+streaming, real read-only tools, editing tools v1, provider dialects, session
+records, and debug surfaces. Future work should follow the same rule: define
+the boundary, implement the capability, then lock it down with tests and
+tutorial updates.

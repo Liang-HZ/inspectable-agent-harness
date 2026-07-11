@@ -7,6 +7,7 @@
 - Agent page、Debug page、Session page 分别面向谁
 - 为什么 model input 和 model output 都要进入 debug
 - 为什么 JSONL session 不是 Debug Console 的内部状态
+- 为什么 permission audit 属于 Debug，而 run policy 同时属于 API、Debug 和 Session
 - 工具输入输出为什么默认收起
 
 ## 背景
@@ -44,6 +45,8 @@ Assistant text 用 Markdown + GFM 渲染，因为模型常输出列表、表格�
 
 Debug page 展示：
 
+- run policy
+- permission audit decisions
 - model input
 - model output
 - assistant deltas
@@ -60,13 +63,17 @@ Debug data 来自 runtime events 加 stream-only debug events。
 
 ## Session Page
 
-Session page 通过下面接口读取 persisted JSONL：
+Session page 通过下面接口浏览 persisted JSONL：
 
 ```text
+GET /api/agent/sessions
 GET /api/agent/sessions/[id]
 ```
 
-它打印 raw records，因为这个页面用于直接检查 replay substrate。
+它先列出本地 sessions，再加载选中 session 的 raw records，因为这个页面用于直接检查 replay substrate。
+
+Session list 会展示 model、session id 尾号、`approvalPolicy` 和
+`sandboxMode`。完整 JSONL 仍然原样显示，不改造成 Debug Console 的事件视图。
 
 ## 为什么 Debug 和 Session 分开
 
@@ -75,6 +82,10 @@ Debug 是 operational。Session 是 durable。
 `debug.historyCommitted` 不存成另一个 `agent_event`，因为 session 已经存了权威 `response_item` records。
 
 这避免未来 resume state 被 debug-only duplication 污染。
+
+Permission audit 也遵循同一个边界：Debug page 用它帮助开发者看清楚
+`allow/ask/deny` 的决策原因；Session page 只展示实际写入 JSONL 的
+`agent_event` 和 `response_item` 记录。
 
 ## Frontend Implementation
 
@@ -104,7 +115,8 @@ lib/agent-stream-projection.ts
 2. 运行一个会使用 `ls/find/grep/read` 的 agent task
 3. 检查 Agent page 是否是 readable transcript
 4. 检查 Debug page 是否有 model input/output 和 tool details
-5. 检查 Session page 是否有 JSONL records
+5. 检查 Debug page 是否有 permission audit
+6. 检查 Session page 是否能列出 sessions 并打开 JSONL records
 
 ## 常见误解
 

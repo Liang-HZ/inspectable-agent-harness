@@ -52,6 +52,7 @@ flowchart TD
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
   AgentTools --> BuiltinTools[lib/agent-builtins.ts]
+  AgentTools --> EditingBuiltins[lib/agent-editing-builtins.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   ModelGateway --> OpenAIClient
@@ -98,6 +99,7 @@ lib/agent-path-policy.ts            Tool path-access policy helpers
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Agent tool groups and registry
 lib/agent-builtins.ts               Built-in read-only local file tools
+lib/agent-editing-builtins.ts       Built-in write/edit local file tools
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-tool-schema.ts           OpenAI strict tool-schema adapter
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
@@ -181,7 +183,9 @@ It converts `unknown` request bodies into a stable `ChatInput` business object.
 `lib/agent-input.ts` owns Zod validation for `/api/agent`.
 
 It converts `unknown` request bodies into a stable `AgentInput` business object
-with `task`, `goal`, `context`, `model`, and `temperature`.
+with `task`, `goal`, `context`, `model`, `temperature`, `approvalPolicy`, and
+`sandboxMode`. Omitted policy fields default to
+`approvalPolicy=on_request` and `sandboxMode=read_only`.
 
 ### Service
 
@@ -244,23 +248,24 @@ browser stream contract:
 - `run_failed` becomes `error`
 
 `components/chat-playground.tsx` keeps these debug events for the current run
-and projects them into three frontend pages:
+and projects them into a three-zone workbench:
 
-- Agent page: a transcript view that chains committed assistant text with the
-  tool batches requested by the same model output, using user-facing labels
-  instead of runtime terms such as "round". Assistant text is rendered as
-  Markdown because model output commonly contains lists, code blocks, and
-  tables. The legacy `AgentStep` display is still available, but collapsed
-  because it is now a display summary rather than the primary runtime story.
-- Debug page: a full inspection console for every sampling round's model input
-  and output, history commits, assistant text, committed assistant messages,
-  tool calls, usage, tool arguments, model-visible tool output, and internal
-  structured tool details. The history commit layer is where
-  `runtimeRole: "working_message" | "final_response"` appears.
-- Session page: a read-only JSONL viewer for the current run's actual persisted
-  session records, loaded through `/api/agent/sessions/[id]`. This page is for
-  inspecting the resume/replay artifact itself; it is intentionally separate
-  from the Debug page's runtime event projection.
+- Left rail: mode switching, current-run status, and a short session list loaded
+  from `/api/agent/sessions`.
+- Center transcript: the user-facing agent experience. It chains committed
+  assistant text with the tool batches requested by the same model output, using
+  user-facing labels instead of runtime terms such as "round". Assistant text is
+  rendered as Markdown because model output commonly contains lists, code
+  blocks, and tables. The legacy `AgentStep` display is still available, but
+  collapsed because it is now a display summary rather than the primary runtime
+  story.
+- Right inspector: Debug, Audit, and Session tabs. Debug shows every model
+  request/output, history commit, assistant message, tool call, usage, tool
+  argument, model-visible tool output, and internal structured tool detail.
+  Audit isolates permission decisions. Session loads persisted JSONL records
+  through `/api/agent/sessions/[id]` for resume/replay inspection. The history
+  commit layer is where `runtimeRole: "working_message" | "final_response"`
+  appears.
 
 The browser remains an observer; it does not execute tools or call the model.
 
@@ -520,7 +525,7 @@ groups are:
 ```text
 utility_builtins    empty skeleton
 read_only_builtins  read, grep, find, ls
-editing_builtins    empty skeleton
+editing_builtins    write, edit
 shell_builtins      empty skeleton
 ```
 
@@ -541,12 +546,35 @@ read    read UTF-8 text files with line pagination
 These tools are read-only, non-destructive, closed-world, idempotent, marked
 parallel-capable, and attached to `pathAccess=current_project`.
 
+`lib/agent-editing-builtins.ts` owns the concrete built-in editing tools:
+
+```text
+write   create or overwrite a UTF-8 text file and return a focused diff
+edit    apply exact replacements to an existing UTF-8 text file and return a focused diff
+```
+
+These tools are destructive, closed-world, sequential, and attached to
+`pathAccess=current_project`. `write` can create parent directories under the
+effective path policy. `edit` is intentionally stricter: the same run must have
+successfully used `read` on the target path before `edit` can execute. If that
+precondition is missing, the runtime returns
+`Error [EDIT_REQUIRES_READ]: ...` as a recoverable tool output and lets the
+model retry by reading first.
+
+`lib/agent-tools.ts` derives provider-visible tools from the current
+`AgentRunPolicy`:
+
+```text
+sandboxMode=read_only          read, grep, find, ls
+sandboxMode=workspace_write    read, grep, find, ls, write, edit
+sandboxMode=danger_full_access read, grep, find, ls, write, edit
+```
+
 `lib/agent-path-policy.ts` owns path policy resolution. The current built-ins
 use `current_project`, so each path is resolved against the current project
 root and then checked with `realpath`; `../` paths and symlink escapes fail as
 ordinary tool errors. The module also defines `allowed_roots` and
-`danger_full_access` for future editing/shell tool layers, but those modes are
-not active for the current read-only built-ins.
+`danger_full_access` for future shell tool layers.
 
 Large outputs return bounded structured data plus actionable notices, such as
 using a later `offset` for `read` or narrowing a `grep` pattern.
@@ -597,6 +625,7 @@ lib/agent-path-policy.ts            current-project / allowed-roots / danger-ful
 lib/agent-tool-runtime.ts           Tool execution lifecycle boundary
 lib/agent-tools.ts                  Tool groups and registry
 lib/agent-builtins.ts               Built-in read-only local file tools
+lib/agent-editing-builtins.ts       Built-in write/edit local file tools
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
 lib/openai-responses-dialect.ts     OpenAI Responses dialect adapter
@@ -638,6 +667,7 @@ flowchart TD
   ToolScheduler --> ToolRuntime
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
   AgentTools --> BuiltinTools[lib/agent-builtins.ts]
+  AgentTools --> EditingBuiltins[lib/agent-editing-builtins.ts]
   AgentTools --> ResponseItems
   SamplingLoop --> AgentResponse[Final answer plus steps]
 ```
@@ -882,25 +912,36 @@ Current implementation status:
 
 - `AgentRunPolicy` exists on `AgentRunContext`.
 - The default is `approvalPolicy=on_request` and `sandboxMode=read_only`.
+- `/api/agent` and `/api/agent/stream` accept `approvalPolicy` and
+  `sandboxMode` in the validated request body, and the React workbench exposes
+  them as Agent form controls.
 - `AgentToolRuntime` creates an `AgentPermissionRequest` before executing a
   tool.
 - The request includes declared tool metadata, the effective path policy for
   the current sandbox mode, and any model-supplied path argument that the tool
   declares as permission-relevant.
+- The request also includes tool-state preconditions, such as whether the
+  current run has already successfully read the target path.
 - `decideAgentToolPermission(...)` checks path policy before approval policy,
   so `approvalPolicy=never` cannot bypass filesystem boundaries.
+- `edit` checks the read-before-edit precondition before execution and is
+  recoverably denied with `EDIT_REQUIRES_READ` when the target has not been
+  read.
 - Known-safe tools are allowed.
+- Write-capable built-ins are denied under `sandboxMode=read_only`, allowed
+  under `workspace_write` after path/precondition checks, and ask under
+  `approvalPolicy=strict` until approval resume exists.
 - Project-outside paths are denied before tool execution and returned to the
   model as recoverable tool errors.
 - Unknown, destructive, or open-world tools ask for approval.
 - Interactive approval resume is not implemented yet, so an `ask` decision emits
   `approval_requested` and then raises `AgentApprovalRequiredError` as a
   fail-closed placeholder.
-- Sandbox mode is not an OS sandbox yet, but it now determines the effective
-  path access policy for filesystem tools. `danger_full_access` widens
-  path-declaring tools to absolute filesystem access, while `read_only` and
-  `workspace_write` keep the current project boundary for the active read-only
-  built-ins.
+- Sandbox mode is not an OS sandbox yet, but it now determines both the
+  effective path access policy and the provider-visible built-in tool surface.
+  `danger_full_access` widens path-declaring tools to absolute filesystem
+  access, while `read_only` and `workspace_write` keep the current project
+  boundary for built-in file tools.
 
 `danger_full_access` is a path/sandbox policy mode, not a fact that a tool can
 claim for itself. It should be selected by the user, app, or run configuration,
@@ -1099,12 +1140,13 @@ The current implementation is intentionally small:
   execution.
 - `AgentStreamProjection` maps runtime events to the current frontend SSE
   contract.
-- The frontend splits the same stream into Agent, Debug, and Session pages. The
-  transcript page groups same-round tool calls into collapsible batches without
-  showing runtime round labels; the Debug page keeps complete scrollable
-  JSON/text payloads for model requests, model outputs, tool lifecycle,
-  permission decisions, tool `modelOutput`, and final usage; the Session page
-  loads the run's persisted JSONL records through the session read API.
+- The frontend splits the same stream into a left session rail, center
+  transcript, and right inspector. The transcript groups same-round tool calls
+  into collapsible batches without showing runtime round labels; the Debug tab
+  keeps complete scrollable JSON/text payloads for model requests, model
+  outputs, tool lifecycle, tool `modelOutput`, and final usage; the Audit tab
+  isolates permission decisions; the Session tab loads the run's persisted
+  JSONL records through the session read API.
 - `AgentSessionStore` persists streaming run metadata, turn context, runtime
   events, and model-visible `response_item` records as JSONL.
 - Existing `AgentStep` objects remain the frontend display contract.

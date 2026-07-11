@@ -7,7 +7,7 @@
 - tool source、group、path policy、execution mode 分别表达什么
 - provider schema 为什么从 agent tool contract 编译出来
 - toy tool 为什么必须从默认能力中移除
-- 当前 built-in tools 如何组合成只读探索能力
+- 当前 built-in tools 如何组合成只读探索和编辑能力
 
 ## 背景
 
@@ -49,11 +49,11 @@ execute       concrete handler
 ```text
 utility_builtins     empty
 read_only_builtins   ls/find/grep/read
-editing_builtins     empty
+editing_builtins     write/edit
 shell_builtins       empty
 ```
 
-空 group 不是 dead code。它们是明确的未来能力插槽。
+shell group 不是 dead code。它是明确的未来能力插槽。
 
 ## Built-In Tools
 
@@ -63,6 +63,12 @@ shell_builtins       empty
 lib/agent-builtins.ts
 ```
 
+具体 editing built-ins 位于：
+
+```text
+lib/agent-editing-builtins.ts
+```
+
 Path policy 移到：
 
 ```text
@@ -70,6 +76,10 @@ lib/agent-path-policy.ts
 ```
 
 这让未来在不同 access modes 下复用文件工具成为可能。
+
+editing tools 只会在 run policy 允许时暴露给 provider。`read_only` run 只暴露
+`ls/find/grep/read`；`workspace_write` run 额外暴露 `write/edit`。runtime
+dispatch 时仍然会检查 permission，所以隐藏的 write-capable call 不能绕过 policy。
 
 ## Provider Boundary
 

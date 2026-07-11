@@ -9,7 +9,7 @@ After reading this chapter, you should understand:
 - what tool source, group, path policy, and execution mode mean
 - why provider schemas compile from the agent tool contract
 - why the toy tool must leave the default capability surface
-- how current built-ins compose into read-only exploration
+- how current built-ins compose into read-only exploration and editing
 
 ## Background
 
@@ -53,11 +53,11 @@ execute       concrete handler
 ```text
 utility_builtins     empty
 read_only_builtins   ls/find/grep/read
-editing_builtins     empty
+editing_builtins     write/edit
 shell_builtins       empty
 ```
 
-The empty groups are not dead code. They are explicit future slots.
+The shell group is not dead code. It is an explicit future slot.
 
 ## Built-In Tools
 
@@ -67,6 +67,12 @@ Concrete read-only built-ins moved into:
 lib/agent-builtins.ts
 ```
 
+Concrete editing built-ins live in:
+
+```text
+lib/agent-editing-builtins.ts
+```
+
 Path policy moved into:
 
 ```text
@@ -74,6 +80,11 @@ lib/agent-path-policy.ts
 ```
 
 This makes it possible to reuse file tools under different future access modes.
+
+Editing tools are only provider-visible when the run policy allows them. A
+`read_only` run exposes `ls/find/grep/read`; a `workspace_write` run also
+exposes `write/edit`. The runtime still checks permissions during dispatch, so
+a hidden write-capable call cannot bypass the policy.
 
 ## Provider Boundary
 

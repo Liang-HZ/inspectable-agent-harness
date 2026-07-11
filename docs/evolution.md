@@ -782,6 +782,99 @@ check inside their handler so symlink escapes are caught even after the
 permission pre-check. The next deeper layer is real sandbox enforcement for
 write/edit, shell, and network-capable tools.
 
+## Phase 24: Workspace Editing Tools v1
+
+The editing skeleton now has real built-in tools:
+
+```text
+editing_builtins  write, edit
+```
+
+`write` creates or overwrites a UTF-8 file and returns a focused diff. It can
+create parent directories, but only under the effective path policy for the run.
+
+`edit` applies exact text replacements to an existing UTF-8 file. It is
+deliberately stricter than `write`:
+
+- every `oldText` must appear exactly once in the original file
+- all replacements are validated before any write happens
+- overlapping replacements are rejected
+- the output includes a focused diff
+- the same run must have successfully used `read` on the target path first
+
+The read-before-edit rule lives in the runtime permission path, not inside the
+model provider adapter. `read` declares `permissionInput.recordsReadPath=true`.
+`edit` declares `permissionInput.requiresPriorRead=true`. `AgentToolRuntime`
+records successful reads in the per-run context, then
+`decideAgentToolPermission(...)` blocks stale edits with:
+
+```text
+Error [EDIT_REQUIRES_READ]: Read the target file first...
+```
+
+This makes the rule provider-neutral and testable. If a model requests
+`read` then `edit` in the same batch, the scheduler runs the batch
+sequentially because `edit` is not parallel-capable. If it requests `edit`
+first, the runtime denies the call and feeds the corrective hint back to the
+model.
+
+The provider-visible tool list is now policy-aware:
+
+```text
+sandboxMode=read_only          -> read, grep, find, ls
+sandboxMode=workspace_write    -> read, grep, find, ls, write, edit
+sandboxMode=danger_full_access -> read, grep, find, ls, write, edit
+```
+
+Direct dispatch still fails closed. Even if a hidden write-capable tool call
+arrives under `sandboxMode=read_only`, permission decision returns
+`PERMISSION_DENIED` before `tool_started`.
+
+## Phase 25: Run Policy Surface And Audit Views
+
+The run policy moved from an internal default into the API and frontend
+contract.
+
+`/api/agent` and `/api/agent/stream` now validate two policy fields:
+
+```text
+approvalPolicy  strict | on_request | never
+sandboxMode     read_only | workspace_write | danger_full_access
+```
+
+When omitted, the request still defaults to the conservative mode:
+
+```text
+approvalPolicy=on_request
+sandboxMode=read_only
+```
+
+The selected policy enters `AgentRunContext`, is written to JSONL
+`session_meta` and `turn_context`, and is emitted in `run_started` so the Debug
+Console can display the exact mode used by the run.
+
+The frontend now exposes the policy as part of the Agent form. This matters
+because the model-visible tool surface is policy-dependent:
+
+```text
+read_only       -> no editing tools are sent to the model
+workspace_write -> write/edit are sent to the model
+danger_full_access -> write/edit are sent to the model and path policy can widen
+```
+
+The Debug page also gained a dedicated permission audit section. It summarizes
+`tool_permission_decided` and `approval_requested` events before the lower-level
+model/tool/history panels. Each audit card shows the tool, policy, path access,
+prior-read state, decision source, decision type, reason, and expandable raw
+payload. This makes permission behavior inspectable without mixing it into the
+end-user Agent transcript.
+
+The Session page became a JSONL browser instead of only a current-run viewer.
+It lists local sessions via `GET /api/agent/sessions`, shows each session's
+model and policy, and loads the selected raw JSONL records through
+`GET /api/agent/sessions/[id]`. Debug remains an operational projection;
+Session remains the durable replay substrate.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core

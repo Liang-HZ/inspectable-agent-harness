@@ -9,6 +9,8 @@ After reading this chapter, you should understand:
 - who the Agent page, Debug page, and Session page are for
 - why model input and model output both belong in debug
 - why JSONL session records are not Debug Console state
+- why permission audit belongs in Debug while run policy belongs in API,
+  Debug, and Session surfaces
 - why tool inputs and outputs are collapsed by default
 
 ## Background
@@ -50,6 +52,8 @@ produce lists, tables, and code blocks.
 
 The Debug page shows:
 
+- run policy
+- permission audit decisions
 - model input
 - model output
 - assistant deltas
@@ -66,14 +70,19 @@ Debug data comes from runtime events plus stream-only debug events.
 
 ## Session Page
 
-The Session page reads persisted JSONL through:
+The Session page browses persisted JSONL through:
 
 ```text
+GET /api/agent/sessions
 GET /api/agent/sessions/[id]
 ```
 
-It prints raw records because this page is meant to inspect the replay substrate
-directly.
+It first lists local sessions, then loads the selected session's raw records
+because this page is meant to inspect the replay substrate directly.
+
+The session list shows model, session id suffix, `approvalPolicy`, and
+`sandboxMode`. The full JSONL still renders as raw records instead of being
+reshaped into the Debug Console event view.
 
 ## Why Debug And Session Are Separate
 
@@ -83,6 +92,10 @@ Debug is operational. Session is durable.
 session already stores authoritative `response_item` records.
 
 This avoids polluting future resume state with debug-only duplication.
+
+Permission audit follows the same boundary. The Debug page uses it to explain
+`allow/ask/deny` decisions to developers. The Session page shows the actual
+`agent_event` and `response_item` records written to JSONL.
 
 ## Frontend Implementation
 
@@ -113,7 +126,8 @@ Manual verification is important here:
 2. run an agent task that uses `ls/find/grep/read`
 3. check Agent page for readable transcript
 4. check Debug page for model input/output and tool details
-5. check Session page for JSONL records
+5. check Debug page for permission audit
+6. check Session page for the session list and selected JSONL records
 
 ## Common Misunderstandings
 

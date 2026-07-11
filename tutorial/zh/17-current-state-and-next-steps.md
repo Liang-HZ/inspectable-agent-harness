@@ -5,7 +5,7 @@
 读完本章后，应该理解：
 
 - 当前项目已经具备哪些 agent 基础能力
-- sandbox、write/edit、shell、approval resume 为什么仍然是空缺
+- sandbox、shell、approval resume，以及更深层 editing safety 为什么仍然是空缺
 - session replay 和 context compaction 为什么会成为后续关键能力
 - 新章节应该如何继续保持教程可维护
 
@@ -28,12 +28,15 @@
 - assistant commit semantics
 - deterministic runtime tests
 - read-only tools: `ls`, `find`, `grep`, `read`
+- editing tools v1: `write`, `edit`
+- read-before-edit runtime precondition
 - path policy boundary
 - tool runtime boundary
 - permission skeleton with path-policy hardening
+- run policy request contract and frontend controls
 - structured tool output contract
-- Debug Console
-- JSONL session store and viewer
+- Debug Console with permission audit
+- JSONL session store and browser
 - tool source/group/path/execution contract
 - unlimited loop with repeated-call guard
 
@@ -56,13 +59,19 @@ external sandbox
 
 ### Write/Edit
 
-Write/edit 不应该是简单文件写入。它们需要：
+Write/edit 现在已经是第一层真实编辑能力：
 
 - diff-oriented output
-- approval decisions
-- conflict behavior
 - clear failure messages
-- partial changes 相关测试
+- 写入前完成 exact replacement validation
+- runtime 层强制 read-before-edit
+
+仍然缺的是更深的生产级层：
+
+- 需要人工决策时的 interactive approval/resume
+- 文件在 read 和 edit 之间变化时的 richer conflict behavior
+- 多个 write-capable calls 之间更强的 concurrency control
+- runtime path policy 下面的 OS-level sandbox enforcement
 
 ### Shell
 
@@ -136,7 +145,7 @@ what remains deferred
 
 ### 误解二：下一步一定要先做 sandbox
 
-Sandbox 很重要，但“sandbox”本身分层。项目现在已经有 pre-execution permission decisions 和 path-policy hardening。OS sandbox、approval resume、write/edit、shell、session replay、telemetry 都可能成为下一步，取决于下一阶段最需要验证什么。
+Sandbox 很重要，但“sandbox”本身分层。项目现在已经有 pre-execution permission decisions 和 path-policy hardening。OS sandbox、approval resume、更深层 editing safety、shell、session replay、telemetry 都可能成为下一步，取决于下一阶段最需要验证什么。
 
 ### 误解三：开源教程只需要介绍最终代码
 
@@ -144,4 +153,4 @@ Sandbox 很重要，但“sandbox”本身分层。项目现在已经有 pre-exe
 
 ## 本章小结
 
-当前项目已经具备真正 agent harness 的基础：模型循环、流式输出、真实只读工具、provider dialect、session 记录和 debug surface。下一步应该继续沿着同一原则推进：先定义边界，再实现能力，再用测试和教程固定下来。
+当前项目已经具备真正 agent harness 的基础：模型循环、流式输出、真实只读工具、editing tools v1、provider dialect、session 记录和 debug surface。下一步应该继续沿着同一原则推进：先定义边界，再实现能力，再用测试和教程固定下来。
