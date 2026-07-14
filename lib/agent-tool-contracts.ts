@@ -1,5 +1,9 @@
 import type { AgentModelToolDefinition } from './agent-model-types';
-import type { AgentToolAnnotations } from './agent-permissions';
+import type {
+  AgentPermissionDecision,
+  AgentRunPolicy,
+  AgentToolAnnotations,
+} from './agent-permissions';
 import type { AgentToolOutput } from './agent-tool-output';
 import type { AgentToolPathAccessPolicy } from './agent-path-policy';
 
@@ -44,6 +48,10 @@ export type AgentToolDefinition = {
   abortable: boolean;
   pathAccess: AgentToolPathAccessPolicy;
   permissionInput?: AgentToolPermissionInput;
+  decidePermission?: (
+    argumentsJson: string,
+    policy: AgentRunPolicy,
+  ) => AgentPermissionDecision | undefined;
   modelTool: AgentModelToolDefinition;
   execute: (
     argumentsJson: string,

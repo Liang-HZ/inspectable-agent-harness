@@ -1,5 +1,6 @@
 import { builtinReadOnlyToolDefinitions } from './agent-builtins';
 import { builtinEditingToolDefinitions as editingBuiltinDefinitions } from './agent-editing-builtins';
+import { builtinShellToolDefinitions as shellBuiltinDefinitions } from './agent-shell-builtins';
 import type { AgentModelToolDefinition } from './agent-model-types';
 import type { AgentRunPolicy } from './agent-permissions';
 import {
@@ -24,7 +25,8 @@ export const builtinUtilityToolDefinitions: AgentToolDefinition[] = [];
 export const builtinEditingToolDefinitions: AgentToolDefinition[] =
   editingBuiltinDefinitions;
 
-export const builtinShellToolDefinitions: AgentToolDefinition[] = [];
+export const builtinShellToolDefinitions: AgentToolDefinition[] =
+  shellBuiltinDefinitions;
 
 export const agentToolGroups: AgentToolDefinitionGroup[] = [
   {
@@ -68,7 +70,9 @@ function isToolVisibleForRunPolicy(
   }
 
   if (toolDefinition.group === 'shell_builtins') {
-    return policy.sandboxMode !== 'read_only';
+    // Shell stays visible in read-only runs: the shell permission override
+    // limits execution to known read-only command patterns there.
+    return true;
   }
 
   return true;

@@ -526,7 +526,7 @@ groups are:
 utility_builtins    empty skeleton
 read_only_builtins  read, grep, find, ls
 editing_builtins    write, edit
-shell_builtins      empty skeleton
+shell_builtins      shell
 ```
 
 Dialects only receive `modelTool`. Internal metadata such as `source`, `group`,
@@ -561,20 +561,50 @@ precondition is missing, the runtime returns
 `Error [EDIT_REQUIRES_READ]: ...` as a recoverable tool output and lets the
 model retry by reading first.
 
+`lib/agent-shell-builtins.ts` owns the concrete built-in shell tool:
+
+```text
+shell   run a command with bash -c, per-call timeout, and truncated output
+```
+
+The shell tool is destructive, open-world, sequential, and attached to
+`pathAccess=current_project` through its optional `workdir` argument. It layers
+two timeouts: the definition-level `timeoutMs=60000` is the hard runtime
+ceiling, while the model-supplied `timeoutMs` (default 10000) is a per-call
+soft timeout that kills the child process. stdout and stderr are collected per
+stream and truncated at 10240 chars / 256 lines. Non-zero exit codes return as
+normal success output because a failing command is information the model needs.
+
+`lib/agent-shell-safety.ts` owns the safe-command classifier. It answers one
+question: does this command match a known read-only pattern? Shell control
+constructs (`;`, `&&`, `>`, `$`, backticks, ...) are never analyzed and fall
+back to review. Pipelines are safe only when every segment is safe. `find` and
+`git` receive argument-level checks. The classifier prefers false negatives
+over false positives.
+
+The shell tool plugs into permissions through the optional `decidePermission`
+hook on the tool contract. The runtime composition rule lives in
+`agent-tool-runtime.ts`: the generic permission decision runs first, a generic
+deny is final, and the tool override can only refine allow/ask decisions
+(decision source `tool_override`). For shell: safe commands allow in every
+sandbox mode, unsafe commands deny in `read_only`, and unsafe commands in
+write modes fall back to the run approval policy.
+
 `lib/agent-tools.ts` derives provider-visible tools from the current
 `AgentRunPolicy`:
 
 ```text
-sandboxMode=read_only          read, grep, find, ls
-sandboxMode=workspace_write    read, grep, find, ls, write, edit
-sandboxMode=danger_full_access read, grep, find, ls, write, edit
+sandboxMode=read_only          read, grep, find, ls, shell (safe commands only)
+sandboxMode=workspace_write    read, grep, find, ls, write, edit, shell
+sandboxMode=danger_full_access read, grep, find, ls, write, edit, shell
 ```
 
 `lib/agent-path-policy.ts` owns path policy resolution. The current built-ins
 use `current_project`, so each path is resolved against the current project
 root and then checked with `realpath`; `../` paths and symlink escapes fail as
 ordinary tool errors. The module also defines `allowed_roots` and
-`danger_full_access` for future shell tool layers.
+`danger_full_access` for tools that need wider roots, such as shell in
+danger-full-access runs.
 
 Large outputs return bounded structured data plus actionable notices, such as
 using a later `offset` for `read` or narrowing a `grep` pattern.
@@ -730,21 +760,23 @@ model loop recoverable while preserving structured `details` in runtime events
 and steps. Permission pauses and denied policy decisions remain fail-closed
 until approval resume exists.
 
-The first production-shaped tool foundation is read-only local file exploration,
-not shell execution. The current tool set gives the model enough structure to
-inspect files without a process sandbox:
+The first production-shaped tool foundation was read-only local file
+exploration; editing and shell layered on top of the same boundaries later. The
+current tool set:
 
 ```text
 read(path, offset?, limit?)
 grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)
 find(pattern, path?, limit?)
 ls(path?, limit?)
+write(path, content)
+edit(path, edits[])
+shell(command, workdir?, timeoutMs?)
 ```
 
-This keeps the safety boundary small while still exercising the same
-provider-neutral function-call path that future shell, edit, and MCP tools will
-use. `grep` depends on local `rg` and reports a model-visible tool error if it
-is unavailable.
+All of them exercise the same provider-neutral function-call path that future
+MCP and hosted tools will use. `grep` depends on local `rg` and reports a
+model-visible tool error if it is unavailable.
 
 Each tool formats its own model-facing `contentText` because each tool knows its
 best readable shape. The runtime centrally appends optional notices and formats

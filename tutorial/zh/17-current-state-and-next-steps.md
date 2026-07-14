@@ -75,15 +75,15 @@ Write/edit 现在已经是第一层真实编辑能力：
 
 ### Shell
 
-Shell 需要：
+Shell v1 已经存在（见第 18 章）：command schema、per-call timeout、cancellation、
+output truncation、safe-command 分类器和 tool-level permission override。
 
-- command schema
-- timeout
-- cancellation
-- output truncation
-- approval rules
-- safe command classification
-- 可能的 PTY/session support
+仍然缺的：
+
+- PTY/交互式 session support
+- 后台执行与流式输出
+- 中间截断或落盘式的大输出处理
+- OS-level sandbox enforcement
 
 ### Approval Resume
 

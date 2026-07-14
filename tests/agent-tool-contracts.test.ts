@@ -47,7 +47,7 @@ test('tool groups expose current builtin surface', () => {
     'ls',
   ]);
   assert.deepEqual(toolsByGroup.editing_builtins, ['write', 'edit']);
-  assert.deepEqual(toolsByGroup.shell_builtins, []);
+  assert.deepEqual(toolsByGroup.shell_builtins, ['shell']);
 });
 
 test('current tool definitions declare runtime metadata explicitly', () => {
@@ -85,12 +85,26 @@ test('current tool definitions declare runtime metadata explicitly', () => {
     assert.equal(toolDefinition?.annotations.readOnly, false);
     assert.equal(toolDefinition?.annotations.destructive, true);
   }
+
+  const shellToolDefinition = toolsByName.get('shell');
+  assert.notEqual(shellToolDefinition, undefined);
+  assert.equal(shellToolDefinition?.source, 'builtin');
+  assert.equal(shellToolDefinition?.group, 'shell_builtins');
+  assert.equal(shellToolDefinition?.category, 'shell');
+  assert.equal(shellToolDefinition?.executionMode, 'sequential');
+  assert.equal(shellToolDefinition?.timeoutMs, 60_000);
+  assert.equal(shellToolDefinition?.abortable, true);
+  assert.equal(shellToolDefinition?.pathAccess.type, 'current_project');
+  assert.equal(shellToolDefinition?.annotations.readOnly, false);
+  assert.equal(shellToolDefinition?.annotations.destructive, true);
+  assert.equal(shellToolDefinition?.annotations.openWorld, true);
+  assert.notEqual(shellToolDefinition?.decidePermission, undefined);
 });
 
 test('provider-visible tools do not include runtime metadata', () => {
   assert.deepEqual(
     agentTools.map((tool) => tool.name),
-    ['read', 'grep', 'find', 'ls'],
+    ['read', 'grep', 'find', 'ls', 'shell'],
   );
 
   for (const modelTool of agentTools) {
@@ -109,7 +123,7 @@ test('provider-visible editing tools depend on run sandbox mode', () => {
       approvalPolicy: 'on_request',
       sandboxMode: 'read_only',
     }).map((tool) => tool.name),
-    ['read', 'grep', 'find', 'ls'],
+    ['read', 'grep', 'find', 'ls', 'shell'],
   );
 
   assert.deepEqual(
@@ -117,7 +131,7 @@ test('provider-visible editing tools depend on run sandbox mode', () => {
       approvalPolicy: 'on_request',
       sandboxMode: 'workspace_write',
     }).map((tool) => tool.name),
-    ['read', 'grep', 'find', 'ls', 'write', 'edit'],
+    ['read', 'grep', 'find', 'ls', 'write', 'edit', 'shell'],
   );
 });
 

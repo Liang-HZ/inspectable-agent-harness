@@ -161,7 +161,7 @@ test('uses a no-tool assistant message as the final response', async () => {
   );
 });
 
-test('exposes only read-only built-in tools to the model in safe mode', async () => {
+test('exposes read-only built-in tools plus safe-command shell to the model in safe mode', async () => {
   const output = await runLoopWithFakeGateway([
     [
       {
@@ -183,7 +183,7 @@ test('exposes only read-only built-in tools to the model in safe mode', async ()
   assert.equal(modelRequestedEvent?.type, 'model_requested');
   assert.deepEqual(
     modelRequestedEvent.request.tools.map((tool) => tool.name),
-    ['read', 'grep', 'find', 'ls'],
+    ['read', 'grep', 'find', 'ls', 'shell'],
   );
 });
 
@@ -215,7 +215,7 @@ test('exposes editing built-in tools to the model in workspace write mode', asyn
   assert.equal(modelRequestedEvent?.type, 'model_requested');
   assert.deepEqual(
     modelRequestedEvent.request.tools.map((tool) => tool.name),
-    ['read', 'grep', 'find', 'ls', 'write', 'edit'],
+    ['read', 'grep', 'find', 'ls', 'write', 'edit', 'shell'],
   );
 });
 

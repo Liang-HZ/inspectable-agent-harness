@@ -81,15 +81,16 @@ What is still missing is the deeper production layer:
 
 ### Shell
 
-Shell needs:
+Shell v1 now exists (see chapter 18): a command schema, per-call timeout,
+cancellation, output truncation, a safe-command classifier, and a tool-level
+permission override.
 
-- command schema
-- timeout
-- cancellation
-- output truncation
-- approval rules
-- safe command classification
-- maybe PTY/session support
+Still missing:
+
+- PTY / interactive session support
+- background execution and streamed output
+- middle-truncation or persist-to-disk handling for large outputs
+- OS-level sandbox enforcement
 
 ### Approval Resume
 

@@ -178,6 +178,28 @@ function createErroredToolExecution(
   };
 }
 
+function decideAgentToolPermissionWithToolOverride(
+  request: AgentPermissionRequest,
+  toolDefinition: AgentToolDefinition,
+  toolCall: AgentModelToolCall,
+  context: AgentRunContext,
+): AgentPermissionDecision {
+  const genericDecision = decideAgentToolPermission(request);
+
+  // A generic deny (path policy, prior-read requirement, read-only writes)
+  // stays authoritative. Tool overrides can only refine allow/ask decisions.
+  if (genericDecision.type === 'deny') {
+    return genericDecision;
+  }
+
+  const overrideDecision = toolDefinition.decidePermission?.(
+    toolCall.argumentsJson,
+    context.policy,
+  );
+
+  return overrideDecision ?? genericDecision;
+}
+
 function assertToolApprovalCanContinue(
   request: AgentPermissionRequest,
   decision: AgentPermissionDecision,
@@ -341,7 +363,12 @@ export async function executeAgentToolCall(
     toolDefinition,
     context,
   );
-  const permissionDecision = decideAgentToolPermission(permissionRequest);
+  const permissionDecision = decideAgentToolPermissionWithToolOverride(
+    permissionRequest,
+    toolDefinition,
+    toolCall,
+    context,
+  );
   callbacks.onEvent?.(
     createToolPermissionDecidedEvent(permissionRequest, permissionDecision),
   );
