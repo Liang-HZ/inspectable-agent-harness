@@ -1058,6 +1058,15 @@ the Agent workbench, all three inspector tabs (Debug/Audit/Session), Chat
 mode, the approval card and compaction card (via temporarily injected fake
 state), and the mobile-width layout, in both light and dark.
 
+A follow-up pass reworked the transcript's tool display: raw tool names
+(`read`, `grep`, `shell`) became human-readable action phrases derived from
+the arguments ("Read lib/agent.ts", "Ran git status"); a single tool call
+renders its label directly while multiple calls collapse into a "Used N
+tools" group that expands to nested per-tool disclosures. A `.shimmerText`
+class (a multi-color gradient clipped to text, animating only
+`background-position`, with a `prefers-reduced-motion` guard) drives the
+"Running" badges and a "Thinking…" indicator.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core

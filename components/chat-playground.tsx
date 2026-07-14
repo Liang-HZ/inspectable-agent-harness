@@ -726,6 +726,18 @@ function modelLabel(mode: WorkbenchMode, state: WorkbenchState): string {
   return model.trim() === '' ? 'env OPENAI_MODEL' : model;
 }
 
+function RunStatusBadge({ label }: { label: string }) {
+  if (label === 'Running') {
+    return (
+      <strong className="runningStatusBadge">
+        <span className="shimmerText">Running</span>
+      </strong>
+    );
+  }
+
+  return <strong>{label}</strong>;
+}
+
 function TextField({
   label,
   value,
@@ -2125,52 +2137,153 @@ function toolBatchStatus(cards: ToolDebugCard[]): string {
   return 'queued';
 }
 
+function shortenForLabel(value: string, maxLength = 52): string {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+
+  if (collapsed.length <= maxLength) {
+    return collapsed;
+  }
+
+  return `${collapsed.slice(0, maxLength - 1)}…`;
+}
+
+function readStringArgument(
+  argumentsJson: string,
+  key: string,
+): string | undefined {
+  try {
+    const parsed = JSON.parse(argumentsJson);
+
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      return undefined;
+    }
+
+    const value = (parsed as Record<string, unknown>)[key];
+
+    return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function toolActionLabel(toolName: string, argumentsJson: string): string {
+  const path = readStringArgument(argumentsJson, 'path');
+  const pattern = readStringArgument(argumentsJson, 'pattern');
+  const command = readStringArgument(argumentsJson, 'command');
+
+  switch (toolName) {
+    case 'read':
+      return path ? `Read ${shortenForLabel(path)}` : 'Read a file';
+    case 'write':
+      return path ? `Wrote ${shortenForLabel(path)}` : 'Wrote a file';
+    case 'edit':
+      return path ? `Edited ${shortenForLabel(path)}` : 'Edited a file';
+    case 'ls':
+      return path ? `Listed ${shortenForLabel(path)}` : 'Listed a directory';
+    case 'find':
+      return pattern ? `Found ${shortenForLabel(pattern)}` : 'Found files';
+    case 'grep':
+      return pattern
+        ? `Searched for ${shortenForLabel(pattern)}`
+        : 'Searched file contents';
+    case 'shell':
+      return command ? `Ran ${shortenForLabel(command)}` : 'Ran a command';
+    default:
+      return `Used ${toolName}`;
+  }
+}
+
+type ToolRunPresentedStatus = 'requested' | 'running' | 'finished' | 'error';
+
+function toolCardPresentedStatus(card: ToolDebugCard): ToolRunPresentedStatus {
+  if (card.isError === true) {
+    return 'error';
+  }
+
+  return card.status;
+}
+
+function ToolRunStatusHint({ status }: { status: ToolRunPresentedStatus }) {
+  if (status === 'running' || status === 'requested') {
+    return <span className="toolRunHint shimmerText">running…</span>;
+  }
+
+  if (status === 'error') {
+    return (
+      <span className="toolRunHint toolRunHintError">needs attention</span>
+    );
+  }
+
+  return null;
+}
+
+function ToolRunDetail({ card }: { card: ToolDebugCard }) {
+  return (
+    <div className="toolRunGrid">
+      <details className="toolPayloadDisclosure">
+        <summary>Input</summary>
+        <pre>{formatJson(parseArgumentsForDisplay(card.argumentsJson))}</pre>
+      </details>
+      <details className="toolPayloadDisclosure">
+        <summary>Result</summary>
+        <pre>{card.modelOutput ?? 'Waiting for tool result...'}</pre>
+      </details>
+    </div>
+  );
+}
+
 function ToolBatchView({ cards }: { cards: ToolDebugCard[] }) {
-  const toolNames = cards.map((card) => card.toolName).join(', ');
   const batchStatus = toolBatchStatus(cards);
+
+  if (cards.length === 1) {
+    const card = cards[0];
+
+    return (
+      <details className="workBatch singleToolBatch">
+        <summary>
+          <span className="workBatchLabel">
+            {toolActionLabel(card.toolName, card.argumentsJson)}
+          </span>
+          <ToolRunStatusHint status={toolCardPresentedStatus(card)} />
+        </summary>
+        <div className="toolBatchList">
+          <ToolRunDetail card={card} />
+        </div>
+      </details>
+    );
+  }
 
   return (
     <details className="workBatch">
       <summary>
-        <span>
-          {batchStatus === 'done' ? 'Used' : 'Using'} {cards.length} tool
-          {cards.length === 1 ? '' : 's'}
+        <span className="workBatchLabel">
+          {batchStatus === 'done' ? 'Used' : 'Using'} {cards.length} tools
         </span>
-        <strong>{toolNames}</strong>
+        <ToolRunStatusHint
+          status={
+            batchStatus === 'needs attention'
+              ? 'error'
+              : batchStatus === 'running'
+                ? 'running'
+                : 'finished'
+          }
+        />
       </summary>
       <div className="toolBatchList">
         {cards.map((card) => (
-          <article className="compactToolCard" key={card.toolCallId}>
-            <div className="toolRunHeader">
-              <div>
-                <h3>{card.toolName}</h3>
-                <span>
-                  {card.isError === true ? 'needs attention' : batchStatus}
-                </span>
-              </div>
-              <strong
-                className={
-                  card.isError === true
-                    ? 'toolStatus errorToolStatus'
-                    : 'toolStatus'
-                }
-              >
-                {card.status}
-              </strong>
-            </div>
-            <div className="toolRunGrid">
-              <details className="toolPayloadDisclosure">
-                <summary>Input</summary>
-                <pre>
-                  {formatJson(parseArgumentsForDisplay(card.argumentsJson))}
-                </pre>
-              </details>
-              <details className="toolPayloadDisclosure">
-                <summary>Result</summary>
-                <pre>{card.modelOutput ?? 'Waiting for tool result...'}</pre>
-              </details>
-            </div>
-          </article>
+          <details className="toolRow" key={card.toolCallId}>
+            <summary>
+              <span className="toolRowLabel">
+                {toolActionLabel(card.toolName, card.argumentsJson)}
+              </span>
+              <ToolRunStatusHint status={toolCardPresentedStatus(card)} />
+            </summary>
+            <ToolRunDetail card={card} />
+          </details>
         ))}
       </div>
     </details>
@@ -2201,7 +2314,13 @@ function AgentTranscript({
           <span>Agent</span>
           <code>{agentDisplayStatus(view)}</code>
         </div>
-        <EmptyState>Waiting for model output...</EmptyState>
+        {view.status === 'streaming' ? (
+          <div className="thinkingIndicator">
+            <span className="shimmerText">Thinking…</span>
+          </div>
+        ) : (
+          <EmptyState>Waiting for model output...</EmptyState>
+        )}
       </section>
     );
   }
@@ -2232,6 +2351,11 @@ function AgentTranscript({
           <article className="assistantText liveAssistantText">
             <AssistantMarkdown text={liveTail} />
           </article>
+        ) : null}
+        {view.status === 'streaming' && !shouldShowLiveAnswer ? (
+          <div className="thinkingIndicator">
+            <span className="shimmerText">Thinking…</span>
+          </div>
         ) : null}
       </div>
     </section>
@@ -2793,9 +2917,9 @@ export function ChatPlayground() {
             <span>Current run</span>
           </div>
           <div className="sidebarRunCard">
-            <strong>
-              {statusText(state.mode, state.chatView, state.agentView)}
-            </strong>
+            <RunStatusBadge
+              label={statusText(state.mode, state.chatView, state.agentView)}
+            />
             <span>{modelLabel(state.mode, state)}</span>
             <small>{currentRunId ?? 'no run id yet'}</small>
             {currentRunResumed ? (
@@ -2833,9 +2957,9 @@ export function ChatPlayground() {
           </div>
           <div className="runMeta">
             <span>{modelLabel(state.mode, state)}</span>
-            <strong>
-              {statusText(state.mode, state.chatView, state.agentView)}
-            </strong>
+            <RunStatusBadge
+              label={statusText(state.mode, state.chatView, state.agentView)}
+            />
           </div>
         </header>
         <div className="conversationScroll" aria-live="polite">

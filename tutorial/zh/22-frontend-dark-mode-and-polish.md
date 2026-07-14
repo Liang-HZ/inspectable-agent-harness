@@ -118,6 +118,16 @@ background:
 
 **`color: var(--surface)` 被误用为高对比度文字色。** 有 5 处地方(`.primaryButton`、`.approveButton`、`.activeModeButton` 等)用白色文字搭配深色/主题色背景,写法是 `color: #ffffff`。脚本按值转换时,这些 `#ffffff` 和"面板背景"用的是同一个值,被一起转成了 `var(--surface)`。这是语义冲突而不是转换错误——`#ffffff` 在这几处的真实含义是"文字要跟按钮背景形成对比",不是"这是一块面板"。深色模式下 `--surface` 变暗后,这些按钮的文字会跟着变成暗色,导致按钮文字消失。修复是引入专门的 `--accent-contrast` 变量(浅色模式下是白色,深色模式下是接近黑色),把这 5 处 `color: var(--surface)` 改成 `color: var(--accent-contrast)`。
 
+## Transcript 工具展示与 shimmer 指示器
+
+后续一轮打磨改了 transcript 里工具执行的呈现方式,对标 Codex/Claude Code 的折叠格式。
+
+**工具名从原始标识符改成动作短语。** 之前每个工具卡片直接显示原始工具名(`read`、`grep`、`shell`),对读者没有信息量。现在 `toolActionLabel(toolName, argumentsJson)` 从参数里提取关键信息拼成人类可读的动作短语:`read {path:"lib/agent.ts"}` → "Read lib/agent.ts",`shell {command:"git status"}` → "Ran git status",`grep {pattern:"..."}` → "Searched for ...";没有可提取参数时退回泛化短语("Ran a command")。标签用英文,与参考截图和整个应用保持一致。
+
+**单工具直接展示,多工具折叠成组。** 一次模型输出后如果只调用了一个工具,summary 直接显示那个工具的动作短语("Ran git status ›"),展开即是它的 Input/Result;如果调用了多个,summary 显示 "Used N tools",展开后是每个工具的嵌套 `<details>`(缩略动作短语),再展开才是单个工具的详情。这正是参考截图里"两次文本输出之间的工具折叠成一组、展开是缩略、再展开是详情"的三层结构。
+
+**"运行中"状态用渐变 shimmer 文字。** 新增一个 `.shimmerText` 类:多色渐变(teal → cyan → 亮色高光)裁剪到文字上(`background-clip: text` + `color: transparent`),只动画 `background-position`,做出一条彩色光带不断扫过文字的循环效果。应用在三处:header 和 sidebar 的 "Running" 徽章、transcript 里等待模型输出时的 "Thinking…" 指示器。shimmer 颜色也走 CSS 变量,深色模式下用更亮的青色。加了 `prefers-reduced-motion: reduce` 守卫,尊重"减少动态效果"的系统设置时关闭动画。
+
 ## 逐页验证
 
 没有依赖代码审查判断"应该没问题了",而是在真实浏览器里(通过 `resize_window` 的 `colorScheme` 参数模拟系统深色模式)逐个检查了:

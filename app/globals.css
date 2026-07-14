@@ -27,6 +27,10 @@
   --success-hover: #145f40;
   --success-dot: #9bd7c4;
   --disabled-bg: #94a3a8;
+  --shimmer-1: #164f62;
+  --shimmer-2: #1a7184;
+  --shimmer-3: #2a9db4;
+  --shimmer-4: #5fc9d8;
 
   color: var(--text-strong);
   background: var(--page-bg);
@@ -70,6 +74,49 @@
     --success-hover: #a0ebc6;
     --success-dot: #3f8f6f;
     --disabled-bg: #3c484c;
+    --shimmer-1: #4fb7cf;
+    --shimmer-2: #6fc6da;
+    --shimmer-3: #9ae0ee;
+    --shimmer-4: #d6f5fb;
+  }
+}
+
+/*
+ * Shimmer text: a colorful gradient band that continuously sweeps across the
+ * glyphs, used on live "Running" / "Thinking…" indicators. The gradient is
+ * clipped to the text, and only its background-position animates.
+ */
+@keyframes shimmerSweep {
+  0% {
+    background-position: 180% 50%;
+  }
+  100% {
+    background-position: -80% 50%;
+  }
+}
+
+.shimmerText {
+  background-image: linear-gradient(
+    100deg,
+    var(--shimmer-1) 0%,
+    var(--shimmer-2) 28%,
+    var(--shimmer-3) 44%,
+    var(--shimmer-4) 52%,
+    var(--shimmer-3) 60%,
+    var(--shimmer-2) 76%,
+    var(--shimmer-1) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: shimmerSweep 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmerText {
+    animation: none;
   }
 }
 
@@ -1175,6 +1222,94 @@ pre {
   padding: 10px;
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* Transcript tool group: friendly labels, nested per-tool disclosures */
+.workBatchLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.workBatch > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workBatch > summary::after,
+.toolRow > summary::after {
+  content: '›';
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.workBatch[open] > summary::after,
+.toolRow[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.toolRow {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.toolRow > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 10px 12px;
+  list-style: none;
+}
+
+.toolRow > summary::-webkit-details-marker {
+  display: none;
+}
+
+.toolRowLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.toolRow .toolRunGrid {
+  border-top: 1px solid var(--border);
+  margin-top: 0;
+  padding: 10px 12px 12px;
+}
+
+.toolRunHint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.02em;
+}
+
+.toolRunHintError {
+  color: var(--danger);
+}
+
+.thinkingIndicator {
+  display: flex;
+  align-items: center;
+  padding: 18px;
+  font-size: 15px;
+  font-weight: 760;
+  letter-spacing: 0.01em;
+}
+
+.runningStatusBadge .shimmerText {
+  display: inline-block;
 }
 
 .stepShelf {

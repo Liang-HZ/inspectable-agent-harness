@@ -208,6 +208,42 @@ disappear. The fix introduces a dedicated `--accent-contrast` variable
 (white in light mode, near-black in dark mode) and changes those five
 `color: var(--surface)` declarations to `color: var(--accent-contrast)`.
 
+## Transcript Tool Display And Shimmer Indicators
+
+A follow-up polish pass reworked how tool executions render in the
+transcript, matching the collapsed format Codex and Claude Code use.
+
+**Tool names went from raw identifiers to action phrases.** Each tool card
+previously showed the raw tool name (`read`, `grep`, `shell`), which carries
+no information for a reader. Now `toolActionLabel(toolName, argumentsJson)`
+pulls the key argument into a human-readable action phrase:
+`read {path:"lib/agent.ts"}` → "Read lib/agent.ts",
+`shell {command:"git status"}` → "Ran git status",
+`grep {pattern:"..."}` → "Searched for ...", falling back to a generic
+phrase ("Ran a command") when there's no clean argument to extract. Labels
+stay English, consistent with the reference screenshot and the whole app.
+
+**A single tool shows directly; multiple tools collapse into a group.** If a
+model output called just one tool, the summary shows that tool's action
+phrase directly ("Ran git status ›") and expands straight to its
+Input/Result. If it called several, the summary shows "Used N tools" and
+expands to a nested `<details>` per tool (each an abbreviated action phrase),
+which in turn expands to that tool's detail. This is exactly the three-level
+"tools between two text outputs collapse into a group, expand to
+abbreviations, expand each to detail" structure from the reference
+screenshot.
+
+**The "running" state uses gradient shimmer text.** A new `.shimmerText`
+class applies a multi-color gradient (teal → cyan → a bright highlight)
+clipped to the text (`background-clip: text` + `color: transparent`) and
+animates only `background-position`, producing a colored band that
+continuously sweeps across the glyphs in a loop. It's applied in three
+places: the "Running" badges in the header and sidebar, and the "Thinking…"
+indicator shown while waiting for model output in the transcript. The
+shimmer colors are CSS variables too, using brighter cyans in dark mode. A
+`prefers-reduced-motion: reduce` guard disables the animation for users who
+ask the system to minimize motion.
+
 ## Page-By-Page Verification
 
 Rather than trusting a code review to conclude "this should be fine now,"
