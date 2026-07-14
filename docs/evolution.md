@@ -974,6 +974,47 @@ second turn against an existing session correctly appended a new
 `model_requested` event showed the model receiving all three accumulated
 messages (system + both turns' user messages) instead of just the new one.
 
+## Phase 29: Context Compaction
+
+Session resume (Phase 28) sent the full reconstructed history to the model
+verbatim on every turn. That works for a few turns, but token usage grows
+linearly with turn count until it hits a limit -- the explicit gap the
+resume phase left open.
+
+Added `lib/agent-compaction.ts` with three pure functions:
+`decideAgentHistoryCompaction` (fires only when the provider actually
+reported `totalTokens` and it crosses a threshold, and the history is long
+enough to be worth compacting), `buildCompactionSummaryRequest` (a
+`tools: []` / `toolChoice: 'none'` request asking the model for a concise
+summary), and `applyAgentHistoryCompaction` (full replacement: keep the
+leading system message and budgeted recent user messages, drop every
+assistant/function_call/function_call_output item, add one new
+`compaction_summary` item). Because no tool call ever survives compaction
+partially, the function_call/function_call_output pairing invariant holds
+without a separate normalization pass, unlike session resume's mid-turn
+crash case.
+
+`AgentResponseItem` gained the `compaction_summary` variant. `lib/agent.ts`
+now calls `modelGateway.createResponse(...)` -- the non-streaming method
+that had existed on `AgentModelGateway` since its introduction but was never
+used by the sampling loop -- between rounds, after tool outputs are fully
+committed and before the next round's request, so compaction can never tear
+apart an in-flight tool call. Only the new summary item gets persisted to
+JSONL; the discarded items were already written when originally committed,
+keeping the file append-only.
+
+A new `history_compacted` event projects to a first-class debug event
+(`historyCompacted`); the Debug Console gained a "Compactions" summary tile
+and a card showing each compaction's token count, removed/kept item counts,
+reason, and an expandable summary. Verified with a sampling-loop integration
+test proving the round immediately after compaction sends the model a
+shorter message list than before, and manually by injecting fake state to
+confirm the Debug Console card renders correctly.
+
+The compaction threshold (`DEFAULT_COMPACTION_TOKEN_THRESHOLD = 8000`) is a
+fixed constant, not derived from any real model's context window, since
+`ModelConfig` doesn't track that metadata yet.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core
@@ -985,7 +1026,9 @@ rather than bypass it:
 - durable (JSONL-persisted) pending approvals that survive a process restart
 - session resume for the non-streaming `/api/agent` route
 - forking a new session from a point in an existing session's history
-- context compaction
+- per-model compaction thresholds derived from real context-window sizes
+- a microcompact path that evicts stale tool output without a model call
+- retry/circuit-breaker behavior when a compaction summary call fails
 - user input during a run
 - retry policy
 - memory / retrieval

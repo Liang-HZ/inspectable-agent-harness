@@ -129,6 +129,19 @@ export function projectAgentEventToStreamEvent(
         resolution: event.resolution,
       };
 
+    case 'history_compacted':
+      return {
+        type: 'debug',
+        event: {
+          type: 'historyCompacted',
+          reason: event.reason,
+          tokenUsageBeforeCompaction: event.tokenUsageBeforeCompaction,
+          removedItemCount: event.removedItemCount,
+          keptItemCount: event.keptItemCount,
+          summary: event.summary,
+        },
+      };
+
     case 'run_succeeded':
       return {
         type: 'done',

@@ -148,6 +148,14 @@ export type AgentDebugStreamEvent =
       resolution: AgentApprovalResolution;
     }
   | {
+      type: 'historyCompacted';
+      reason: string;
+      tokenUsageBeforeCompaction: AgentTokenUsage;
+      removedItemCount: number;
+      keptItemCount: number;
+      summary: string;
+    }
+  | {
       type: 'runCancelled';
       reason: string;
     };

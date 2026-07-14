@@ -58,6 +58,8 @@ flowchart TD
   AgentTools --> EditingBuiltins[lib/agent-editing-builtins.ts]
   AgentTools --> ShellBuiltins[lib/agent-shell-builtins.ts]
   ShellBuiltins --> ShellSafety[lib/agent-shell-safety.ts]
+  AgentService --> AgentCompaction[lib/agent-compaction.ts]
+  AgentCompaction --> ModelGateway
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   ModelGateway --> OpenAIClient
@@ -111,6 +113,8 @@ lib/agent-builtins.ts               Built-in read-only local file tools
 lib/agent-editing-builtins.ts       Built-in write/edit local file tools
 lib/agent-shell-builtins.ts         Built-in shell tool
 lib/agent-shell-safety.ts           Safe-command classifier for the shell tool
+lib/agent-response-items.ts         Provider-neutral model-visible history contract
+lib/agent-compaction.ts             History compaction decision and full-replacement transform
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-tool-schema.ts           OpenAI strict tool-schema adapter
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
@@ -1164,13 +1168,57 @@ unknown `sessionId` throws rather than silently starting a new session, so
 the failure surfaces as an SSE `error` event instead of a silent new
 conversation.
 
+Context compaction now exists (chapter 21). `lib/agent-compaction.ts` owns
+the pure decision/transform functions:
+
+```text
+decideAgentHistoryCompaction(tokenUsage, history, threshold)
+  returns shouldCompact: false when tokenUsage is null (the provider didn't
+  report usage), when totalTokens is below the threshold, or when history is
+  too short to be worth compacting; otherwise returns the reason and the
+  triggering tokenUsage
+
+buildCompactionSummaryRequest(history)
+  a tools:[] / toolChoice:'none' AgentModelRequest asking the model for a
+  concise summary of the transcript so far
+
+applyAgentHistoryCompaction(history, summaryText)
+  full replacement: keeps the leading system message (if any) and recent
+  user messages (reverse-filled, budgeted at 20000 chars), drops every
+  assistant/function_call/function_call_output item, and inserts one new
+  compaction_summary item -- because no tool call ever survives partially,
+  the function_call/function_call_output pairing invariant holds without a
+  separate normalization pass
+```
+
+`lib/agent.ts`'s `compactAgentHistoryIfNeeded` calls
+`modelGateway.createResponse(...)` (the non-streaming method on
+`AgentModelGateway`, previously unused by the sampling loop) and runs
+between sampling rounds -- after a round's tool outputs are fully committed,
+before the next round's model request -- so compaction never tears apart an
+in-flight tool call. Only the new `compaction_summary` response item is
+written back to JSONL; the discarded items were already persisted when
+originally committed, so the file remains append-only and does not shrink.
+`AgentResponseItem` gained the `compaction_summary` variant, and a
+`history_compacted` event (projected as the debug event `historyCompacted`)
+records the reason, token usage, and removed/kept item counts for the Debug
+Console.
+
+There is no dedicated `compacted` JSONL row type distinct from ordinary
+`response_item`/`agent_event` records -- compaction is fully observable
+through the existing record kinds, so a bespoke third type wasn't needed.
+
 Current limitations:
 
 - resume only exists for the streaming route; the non-streaming `/api/agent`
   route has no session concept and never persists
-- no compaction rows yet -- resumed history is sent to the model verbatim, so
-  token usage grows with turn count until compaction exists (a future
-  chapter)
+- the compaction token threshold is a fixed constant
+  (`DEFAULT_COMPACTION_TOKEN_THRESHOLD`), not configured per model's real
+  context window, since `ModelConfig` doesn't track that metadata
+- no Claude Code-style microcompact that evicts stale tool output without a
+  model call; every compaction here costs one extra model call
+- no retry or circuit breaker if the summarization call fails -- the run
+  just fails
 - no way to fork a new session from a point in history (Codex's `fork`)
 - approval pause/resume (chapter 19) works within a live run, but pending
   approval state is process memory only and is not persisted to JSONL, so it
@@ -1181,9 +1229,9 @@ Future session work should add:
 
 ```text
 event_msg          UI/internal events that are not model-visible
-compacted           summary plus optional replacement history
 session fork        branch a new session from a point in an existing session's history
 durable approvals   persist pending approval state so it survives a restart
+per-model limits    configure the compaction threshold from real context-window sizes
 ```
 
 The next agent boundary can add these modules when the runtime needs them:
@@ -1260,13 +1308,13 @@ The current implementation is intentionally small:
 
 Future work should grow the harness in this order:
 
-1. add context compaction and history reconstruction
-2. enforce OS-level sandboxing under the existing path/permission boundaries
-3. add richer tools and MCP-style external tool registration
+1. enforce OS-level sandboxing under the existing path/permission boundaries
+2. add richer tools and MCP-style external tool registration
+3. configure the compaction threshold and other run limits per model
 
 Already done: interactive approval pause/resume (chapter 19), a shell tool
-behind a safe-command classifier (chapter 18), and session replay/resume for
-multi-turn conversations (chapter 20).
+behind a safe-command classifier (chapter 18), session replay/resume for
+multi-turn conversations (chapter 20), and context compaction (chapter 21).
 
 ## Maintenance Rule
 

@@ -3,6 +3,7 @@ import type {
   AgentDebugStreamEvent,
   AgentResult,
   AgentStep,
+  AgentTokenUsage,
 } from './agent-api-types';
 import type {
   AgentModelAssistantMessage,
@@ -48,6 +49,12 @@ import {
   responseItemsToModelMessages,
   type AgentResponseItem,
 } from './agent-response-items';
+import {
+  applyAgentHistoryCompaction,
+  buildCompactionSummaryRequest,
+  decideAgentHistoryCompaction,
+  DEFAULT_COMPACTION_TOKEN_THRESHOLD,
+} from './agent-compaction';
 
 type RunAgentStreamCallbacks = {
   onEvent: (event: AgentEvent) => void;
@@ -502,6 +509,46 @@ async function runSamplingRound(
   };
 }
 
+async function compactAgentHistoryIfNeeded(
+  modelGateway: AgentModelGateway,
+  context: AgentRunContext,
+  history: AgentResponseItem[],
+  tokenUsage: AgentTokenUsage | null,
+  session: AgentSession | undefined,
+  emitAgentEvent: ((event: AgentEvent) => void) | undefined,
+): Promise<void> {
+  const decision = decideAgentHistoryCompaction(
+    tokenUsage,
+    history,
+    DEFAULT_COMPACTION_TOKEN_THRESHOLD,
+  );
+
+  if (!decision.shouldCompact) {
+    return;
+  }
+
+  assertAgentRunNotAborted(context);
+  const summaryRequest = buildCompactionSummaryRequest(history);
+  const summaryResponse = await modelGateway.createResponse(summaryRequest);
+  const compaction = applyAgentHistoryCompaction(history, summaryResponse.text);
+
+  history.length = 0;
+  history.push(...compaction.history);
+
+  if (session !== undefined) {
+    appendAgentResponseItem(session, compaction.summaryItem);
+  }
+
+  emitAgentEvent?.({
+    type: 'history_compacted',
+    reason: decision.reason,
+    tokenUsageBeforeCompaction: decision.tokenUsage,
+    removedItemCount: compaction.removedItemCount,
+    keptItemCount: compaction.keptItemCount,
+    summary: summaryResponse.text,
+  });
+}
+
 export async function runSamplingLoop(
   modelGateway: AgentModelGateway,
   input: AgentInput,
@@ -635,6 +682,15 @@ export async function runSamplingLoop(
     if (repeatedToolCallLoopError !== undefined) {
       throw repeatedToolCallLoopError;
     }
+
+    await compactAgentHistoryIfNeeded(
+      modelGateway,
+      context,
+      history,
+      roundResult.usage.tokenUsage,
+      session,
+      emitAgentEvent,
+    );
   }
 }
 

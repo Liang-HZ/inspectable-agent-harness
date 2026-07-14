@@ -33,6 +33,7 @@ Chinese mirror: [../zh/README.md](../zh/README.md)
 | [18](18-shell-tool-and-command-safety.md) | Shell tool and command safety | Give the model a shell behind a safe-command classifier and tool-level permission override. |
 | [19](19-approval-pause-and-resume.md) | Approval pause and resume | Turn an `ask` decision from an immediate failure into a suspend-and-wait that resumes after approval or denial. |
 | [20](20-session-replay-and-resume.md) | Session replay and resume | Turn a single-turn JSONL session into a real multi-turn conversation that can be continued. |
+| [21](21-context-compaction.md) | Context compaction | Compact history automatically once a token threshold is reached, so long conversations don't grow without bound. |
 
 ## How To Read
 
@@ -40,9 +41,9 @@ If you are new to the project, read chapters 01 through 05 first. They explain
 why this repo values explicit boundaries and inspectability.
 
 If you want the current agent runtime, read chapters 08 through 16 plus 18
-through 20. They cover the provider-neutral loop, real tools, debug surface,
+through 21. They cover the provider-neutral loop, real tools, debug surface,
 session records, loop guardrails, the shell boundary, approval pause/resume,
-and session resume.
+session resume, and context compaction.
 
 If you are adding the next capability, read chapter 17 before implementing it.
 The next layer should follow the same discipline: define the boundary, expose

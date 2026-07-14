@@ -695,3 +695,124 @@ test('resumes the loop with a recoverable error after an interactive denial', as
     assert.match(toolOutput.output, /APPROVAL_DENIED/);
   }
 });
+
+test('compacts history once reported usage crosses the threshold, and the next round sees the compacted history', async () => {
+  const context = createAgentRunContext({
+    runId: 'test-run-compaction',
+    policy: { approvalPolicy: 'never', sandboxMode: 'read_only' },
+  });
+  const history = initialHistory();
+  const steps: AgentStep[] = [];
+  const events: AgentEvent[] = [];
+  const modelCallUsages: AgentModelCallUsage[] = [];
+  const streamRequests: AgentModelStreamEvent[][][] = [
+    [
+      [
+        {
+          type: 'tool_call_committed',
+          toolCall: { id: 'call-1', name: 'ls', argumentsJson: '{}' },
+        },
+        {
+          type: 'completed',
+          model: 'fake-model',
+          usage: {
+            tokenUsage: {
+              inputTokens: 8000,
+              cachedInputTokens: null,
+              outputTokens: 0,
+              reasoningOutputTokens: 0,
+              totalTokens: 8000,
+            },
+            rawUsage: null,
+          },
+        },
+      ],
+      [
+        { type: 'text_delta', delta: 'Done after compaction.' },
+        {
+          type: 'assistant_message_done',
+          message: { text: 'Done after compaction.', providerPhase: null },
+        },
+        { type: 'completed', model: 'fake-model', usage: usage },
+      ],
+    ],
+  ];
+  const pendingStreamRounds = streamRequests[0]?.map((round) => [...round]);
+  const streamRequestMessageCounts: number[] = [];
+  let createResponseCallCount = 0;
+
+  const gateway: AgentModelGateway = {
+    model: 'fake-model',
+    wireApi: 'openai-responses',
+    capabilities: {
+      tools: true,
+      streaming: true,
+      streamingUsage: true,
+      parallelToolCalls: true,
+    },
+
+    async createResponse(request) {
+      createResponseCallCount += 1;
+      assert.equal(request.tools.length, 0);
+      assert.equal(request.toolChoice, 'none');
+
+      return {
+        model: 'fake-model',
+        text: 'Compacted summary text.',
+        toolCalls: [],
+        usage: { tokenUsage: null, rawUsage: null },
+      };
+    },
+
+    async streamResponse(request) {
+      streamRequestMessageCounts.push(request.messages.length);
+      const round = pendingStreamRounds?.shift();
+      if (round === undefined) {
+        throw new Error('Fake gateway received more rounds than expected.');
+      }
+
+      return (async function* streamRound() {
+        for (const event of round) {
+          yield event;
+        }
+      })();
+    },
+  };
+
+  const result = await runSamplingLoop(
+    gateway,
+    baseInput,
+    context,
+    history,
+    steps,
+    modelCallUsages,
+    undefined,
+    (event) => events.push(event),
+    undefined,
+  );
+
+  assert.equal(result.answer, 'Done after compaction.');
+  assert.equal(createResponseCallCount, 1);
+
+  const compactedEvent = events.find(
+    (event) => event.type === 'history_compacted',
+  );
+  assert.notEqual(compactedEvent, undefined);
+  if (compactedEvent?.type === 'history_compacted') {
+    assert.equal(compactedEvent.tokenUsageBeforeCompaction.totalTokens, 8000);
+    assert.equal(compactedEvent.summary, 'Compacted summary text.');
+  }
+
+  // Round 2's request should be built from the compacted history (system +
+  // summary + user), not the original 4-item history from before compaction.
+  assert.deepEqual(streamRequestMessageCounts, [2, 3]);
+
+  assert.equal(
+    history.some((item) => item.type === 'function_call'),
+    false,
+  );
+  assert.equal(
+    history.some((item) => item.type === 'compaction_summary'),
+    true,
+  );
+});

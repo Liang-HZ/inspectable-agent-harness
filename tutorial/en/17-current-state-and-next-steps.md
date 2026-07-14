@@ -128,12 +128,19 @@ visually separating turns.
 
 ### Context Compaction
 
-Long histories will eventually need compaction. It must preserve:
+Now implemented (see chapter 21): once reported token usage crosses a
+threshold, `decideAgentHistoryCompaction` triggers, and
+`applyAgentHistoryCompaction` applies a full-replacement strategy — keeping
+the system message, one model-generated summary, and budgeted recent user
+messages, with everything else absorbed into the summary. Because
+compaction never keeps a tool call partially, the
+function_call/function_call_output pairing invariant is satisfied almost
+automatically.
 
-- user goal
-- current task state
-- recent tool observations
-- function_call/function_call_output invariants
+Still missing: the threshold is a fixed constant, not configured per
+model's context window; there is no Claude Code-style microcompact that
+skips the model call; summary generation has no retry or circuit breaker on
+failure.
 
 ### MCP / Dynamic / Hosted Tools
 

@@ -30,7 +30,14 @@ export type AgentResponseItem =
       toolName: string;
       output: string;
       isError: boolean;
+    }
+  | {
+      type: 'compaction_summary';
+      content: string;
     };
+
+const COMPACTION_SUMMARY_MESSAGE_PREFIX =
+  'Earlier conversation summary (older turns were compacted to save context):\n\n';
 
 function appendFunctionCallToMessages(
   messages: AgentModelMessage[],
@@ -85,6 +92,14 @@ export function responseItemsToModelMessages(
         id: item.callId,
         name: item.name,
         argumentsJson: item.argumentsJson,
+      });
+      continue;
+    }
+
+    if (item.type === 'compaction_summary') {
+      messages.push({
+        role: 'user',
+        content: `${COMPACTION_SUMMARY_MESSAGE_PREFIX}${item.content}`,
       });
       continue;
     }

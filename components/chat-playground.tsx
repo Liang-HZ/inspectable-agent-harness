@@ -1103,6 +1103,11 @@ type PermissionAuditDebugEvent = Extract<
   { type: 'toolPermissionDecided' | 'approvalRequested' }
 >;
 
+type HistoryCompactedDebugEvent = Extract<
+  AgentDebugStreamEvent,
+  { type: 'historyCompacted' }
+>;
+
 type AgentSessionFetchState =
   | {
       status: 'idle';
@@ -1226,6 +1231,8 @@ function eventLabel(event: AgentDebugStreamEvent): string {
       return `${event.request.toolName} approval requested`;
     case 'approvalResolved':
       return `${event.toolName} approval ${event.resolution.type}`;
+    case 'historyCompacted':
+      return `history compacted: ${event.removedItemCount} item(s) removed, ${event.keptItemCount} kept`;
     case 'runCancelled':
       return event.reason;
   }
@@ -1267,6 +1274,15 @@ function permissionAuditEvents(
     (event): event is PermissionAuditDebugEvent =>
       event.type === 'toolPermissionDecided' ||
       event.type === 'approvalRequested',
+  );
+}
+
+function historyCompactedEvents(
+  events: AgentDebugStreamEvent[],
+): HistoryCompactedDebugEvent[] {
+  return events.filter(
+    (event): event is HistoryCompactedDebugEvent =>
+      event.type === 'historyCompacted',
   );
 }
 
@@ -1490,6 +1506,8 @@ function responseItemLabel(
       return `tool request ${item.name}`;
     case 'function_call_output':
       return `tool result ${item.toolName}`;
+    case 'compaction_summary':
+      return 'compaction summary';
   }
 }
 
@@ -1520,6 +1538,38 @@ function HistoryCommitDebugView({
           </details>
         ))}
       </div>
+    </article>
+  );
+}
+
+function HistoryCompactionDebugView({
+  event,
+  index,
+}: {
+  event: HistoryCompactedDebugEvent;
+  index: number;
+}) {
+  return (
+    <article className="historyCommitCard compactionCard">
+      <div className="toolDebugHeader">
+        <div>
+          <h3>Compaction {index + 1}</h3>
+          <span>
+            {event.removedItemCount} item(s) removed, {event.keptItemCount}{' '}
+            kept
+          </span>
+        </div>
+        <strong className="toolStatus askToolStatus">
+          {event.tokenUsageBeforeCompaction.totalTokens} tokens
+        </strong>
+      </div>
+      <p className="auditReason">{event.reason}</p>
+      <details className="debugDetails">
+        <summary>Summary sent to the model</summary>
+        <pre className="debugTextBlock fullDebugTextBlock">
+          {event.summary}
+        </pre>
+      </details>
     </article>
   );
 }
@@ -1637,6 +1687,7 @@ function AgentDebugConsole({
   const modelOutputs = modelCompletedEvents(events);
   const historyCommits = historyCommittedEvents(events);
   const auditEvents = permissionAuditEvents(events);
+  const compactionEvents = historyCompactedEvents(events);
 
   return (
     <section className="debugPanel">
@@ -1671,6 +1722,10 @@ function AgentDebugConsole({
           <span className="debugLabel">Audit decisions</span>
           <strong>{auditEvents.length}</strong>
         </div>
+        <div>
+          <span className="debugLabel">Compactions</span>
+          <strong>{compactionEvents.length}</strong>
+        </div>
       </div>
       {modelRequests.length === 0 ? (
         <EmptyState>No model request yet.</EmptyState>
@@ -1703,6 +1758,17 @@ function AgentDebugConsole({
               event={event}
               index={index}
               key={`history-${index}`}
+            />
+          ))}
+        </div>
+      )}
+      {compactionEvents.length === 0 ? null : (
+        <div className="historyDebugList">
+          {compactionEvents.map((event, index) => (
+            <HistoryCompactionDebugView
+              event={event}
+              index={index}
+              key={`compaction-${index}`}
             />
           ))}
         </div>

@@ -113,12 +113,14 @@ user 消息)写回磁盘,不会重写整段历史。
 
 ### Context Compaction
 
-长 history 最终需要 compaction。它必须保留：
+已经实现（见第 21 章）：token usage 达到阈值时,`decideAgentHistoryCompaction`
+触发压缩,`applyAgentHistoryCompaction` 用"完全替换"策略保留 system message、
+一条模型生成的摘要、以及预算内的最近 user 消息,其余全部吸收进摘要。因为压缩
+从不保留部分工具调用,function_call/function_call_output 配对不变量几乎是
+自动满足的。
 
-- user goal
-- current task state
-- recent tool observations
-- function_call/function_call_output invariants
+仍然缺的：阈值是固定常量,没有按模型 context window 配置;没有 Claude Code
+式不调模型的 microcompact;摘要生成失败没有重试/熔断。
 
 ### MCP / Dynamic / Hosted Tools
 

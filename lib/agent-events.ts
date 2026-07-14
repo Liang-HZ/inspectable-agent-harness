@@ -1,4 +1,9 @@
-import type { AgentResult, AgentStep, AgentUsage } from './agent-api-types';
+import type {
+  AgentResult,
+  AgentStep,
+  AgentTokenUsage,
+  AgentUsage,
+} from './agent-api-types';
 import type { AgentModelStage } from './agent-model-stages';
 import type {
   AgentModelAssistantMessage,
@@ -101,6 +106,14 @@ export type AgentEvent =
       toolCallId: string;
       toolName: string;
       resolution: AgentApprovalResolution;
+    }
+  | {
+      type: 'history_compacted';
+      reason: string;
+      tokenUsageBeforeCompaction: AgentTokenUsage;
+      removedItemCount: number;
+      keptItemCount: number;
+      summary: string;
     }
   | {
       type: 'run_succeeded';
@@ -247,6 +260,13 @@ export function applyAgentEvent(
     return {
       ...state,
       status: 'running_tool',
+      events: events,
+    };
+  }
+
+  if (event.type === 'history_compacted') {
+    return {
+      ...state,
       events: events,
     };
   }
