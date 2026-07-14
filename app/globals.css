@@ -319,6 +319,49 @@ select {
   color: #9f2e2e;
 }
 
+.continueSessionButton {
+  min-width: fit-content;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.continueSessionButton:hover {
+  border-color: #164f62;
+  color: #164f62;
+}
+
+.linkButton {
+  border: 0;
+  background: none;
+  color: #1a7184;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 760;
+  text-decoration: underline;
+}
+
+.linkButton:hover {
+  color: #164f62;
+}
+
+.sessionContinueBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #bcd8dc;
+  border-radius: 8px;
+  background: #eef6f7;
+  padding: 8px 12px;
+  color: #164f62;
+  font-size: 12px;
+}
+
+.sessionContinueBanner code {
+  color: #164f62;
+}
+
 .buttonDot {
   width: 8px;
   height: 8px;
@@ -1258,6 +1301,11 @@ body {
   color: #66777e;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.sidebarRunCard .resumedBadge {
+  color: #1a7184;
+  font-weight: 760;
 }
 
 .sidebarNotice {

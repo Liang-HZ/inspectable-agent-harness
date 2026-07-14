@@ -62,6 +62,7 @@ export async function requestAgentRun(
         temperature: body.temperature,
         approvalPolicy: body.approvalPolicy,
         sandboxMode: body.sandboxMode,
+        sessionId: body.sessionId,
       }),
     });
 
@@ -200,6 +201,7 @@ export async function requestAgentRunStream(
       temperature: body.temperature,
       approvalPolicy: body.approvalPolicy,
       sandboxMode: body.sandboxMode,
+      sessionId: body.sessionId,
     }),
   });
 

@@ -23,6 +23,8 @@ export function projectAgentEventToStreamEvent(
         event: {
           type: 'runStarted',
           runId: event.runId,
+          sessionId: event.sessionId,
+          resumed: event.resumed,
           policy: event.policy,
         },
       };

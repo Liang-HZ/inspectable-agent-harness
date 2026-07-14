@@ -292,3 +292,122 @@ export function readAgentSessionRecordsById(
 
   return readAgentSessionRecords(path);
 }
+
+const SESSION_RESUME_INTERRUPTED_MESSAGE =
+  'Error [SESSION_RESUME_INTERRUPTED]: This tool call did not finish before the previous run on this session ended, so no output was recorded. Treat it as not executed and decide whether to retry it.';
+
+function createSynthesizedInterruptedOutput(
+  functionCall: Extract<AgentResponseItem, { type: 'function_call' }>,
+): AgentResponseItem {
+  return {
+    type: 'function_call_output',
+    callId: functionCall.callId,
+    toolName: functionCall.name,
+    output: SESSION_RESUME_INTERRUPTED_MESSAGE,
+    isError: true,
+  };
+}
+
+export type AgentSessionHistoryNormalization = {
+  history: AgentResponseItem[];
+  synthesizedItems: AgentResponseItem[];
+};
+
+/**
+ * Ensures every `function_call` has a matching `function_call_output`.
+ * A crash or abort between committing a tool call and committing its output
+ * leaves an orphan `function_call` in the JSONL; provider dialects require
+ * every tool call to be answered, so replaying that history verbatim would
+ * make the next model request invalid.
+ */
+export function normalizeAgentResponseItemHistory(
+  items: AgentResponseItem[],
+): AgentSessionHistoryNormalization {
+  const outputCallIds = new Set(
+    items
+      .filter((item) => item.type === 'function_call_output')
+      .map((item) => item.callId),
+  );
+  const synthesizedItems: AgentResponseItem[] = [];
+  const history: AgentResponseItem[] = [];
+
+  for (const item of items) {
+    history.push(item);
+
+    if (item.type !== 'function_call' || outputCallIds.has(item.callId)) {
+      continue;
+    }
+
+    const synthesizedOutput = createSynthesizedInterruptedOutput(item);
+    history.push(synthesizedOutput);
+    synthesizedItems.push(synthesizedOutput);
+  }
+
+  return {
+    history: history,
+    synthesizedItems: synthesizedItems,
+  };
+}
+
+function readAgentResponseItemsFromRecords(
+  records: AgentSessionRecord[],
+): AgentResponseItem[] {
+  return records
+    .filter((record): record is Extract<AgentSessionRecord, { type: 'response_item' }> =>
+      record.type === 'response_item',
+    )
+    .map((record) => record.payload);
+}
+
+export type AgentSessionResumeResult =
+  | {
+      ok: true;
+      session: AgentSession;
+      history: AgentResponseItem[];
+      synthesizedItems: AgentResponseItem[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+/**
+ * Reopens an existing session for a new turn: reconstructs the model-visible
+ * response-item history from persisted records and normalizes it, without
+ * writing a new `session_meta` record. Callers append the new turn's items
+ * (including any returned `synthesizedItems`) to the same file.
+ */
+export function resumeAgentSession(
+  sessionId: string,
+): AgentSessionResumeResult {
+  const path = findAgentSessionPathById(sessionId);
+
+  if (path === undefined) {
+    return {
+      ok: false,
+      error: `Agent session not found: ${sessionId}`,
+    };
+  }
+
+  const records = readAgentSessionRecords(path);
+  const rawHistory = readAgentResponseItemsFromRecords(records);
+
+  if (rawHistory.length === 0) {
+    return {
+      ok: false,
+      error: `Agent session has no response history to resume: ${sessionId}`,
+    };
+  }
+
+  const normalized = normalizeAgentResponseItemHistory(rawHistory);
+
+  return {
+    ok: true,
+    session: {
+      id: sessionId,
+      path: path,
+    },
+    history: normalized.history,
+    synthesizedItems: normalized.synthesizedItems,
+  };
+}

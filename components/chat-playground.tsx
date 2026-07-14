@@ -53,6 +53,7 @@ type AgentFormState = {
   temperature: string;
   approvalPolicy: AgentApprovalPolicy;
   sandboxMode: AgentSandboxMode;
+  sessionId: string;
 };
 
 type ChatViewState =
@@ -169,6 +170,10 @@ type WorkbenchAction =
       value: AgentSandboxMode;
     }
   | {
+      type: 'agentSessionIdChanged';
+      value: string;
+    }
+  | {
       type: 'agentSubmitStarted';
     }
   | {
@@ -244,12 +249,14 @@ type AgentFormProps = {
   onTemperatureChange: (value: string) => void;
   onApprovalPolicyChange: (value: AgentApprovalPolicy) => void;
   onSandboxModeChange: (value: AgentSandboxMode) => void;
+  onSessionIdChange: (value: string) => void;
 };
 
 type AgentInspectorPanelProps = {
   agentPage: AgentPageMode;
   agentView: AgentViewState;
   onAgentPageChange: (page: AgentPageMode) => void;
+  onContinueSession: (sessionId: string) => void;
 };
 
 const AGENT_APPROVAL_POLICY_OPTIONS: Array<{
@@ -291,6 +298,7 @@ const initialState: WorkbenchState = {
     temperature: '0.7',
     approvalPolicy: 'on_request',
     sandboxMode: 'read_only',
+    sessionId: '',
   },
   agentView: {
     status: 'idle',
@@ -425,6 +433,15 @@ function workbenchReducer(
         agentForm: {
           ...state.agentForm,
           sandboxMode: action.value,
+        },
+      };
+
+    case 'agentSessionIdChanged':
+      return {
+        ...state,
+        agentForm: {
+          ...state.agentForm,
+          sessionId: action.value,
         },
       };
 
@@ -639,6 +656,24 @@ function agentRunId(view: AgentViewState): string | undefined {
   );
 
   return runStartedEvent?.runId;
+}
+
+function agentSessionId(view: AgentViewState): string | undefined {
+  const runStartedEvent = agentViewDebugEvents(view).find(
+    (event): event is Extract<AgentDebugStreamEvent, { type: 'runStarted' }> =>
+      event.type === 'runStarted',
+  );
+
+  return runStartedEvent?.sessionId;
+}
+
+function agentRunResumed(view: AgentViewState): boolean {
+  const runStartedEvent = agentViewDebugEvents(view).find(
+    (event): event is Extract<AgentDebugStreamEvent, { type: 'runStarted' }> =>
+      event.type === 'runStarted',
+  );
+
+  return runStartedEvent?.resumed ?? false;
 }
 
 function agentRunPolicyFromEvents(
@@ -885,9 +920,24 @@ function AgentForm({
   onTemperatureChange,
   onApprovalPolicyChange,
   onSandboxModeChange,
+  onSessionIdChange,
 }: AgentFormProps) {
   return (
     <form className="requestForm agentComposerForm" onSubmit={onSubmit}>
+      {form.sessionId !== '' ? (
+        <div className="sessionContinueBanner">
+          <span>
+            Continuing session <code>{sessionShortId(form.sessionId)}</code>
+          </span>
+          <button
+            type="button"
+            className="linkButton"
+            onClick={() => onSessionIdChange('')}
+          >
+            Start new session
+          </button>
+        </div>
+      ) : null}
       <TextAreaField
         label="Task"
         value={form.task}
@@ -1786,12 +1836,18 @@ function sessionShortId(id: string): string {
   return id.length <= 8 ? id : id.slice(-8);
 }
 
-function AgentSessionView({ view }: { view: AgentViewState }) {
-  const runId = agentRunId(view);
+function AgentSessionView({
+  view,
+  onContinueSession,
+}: {
+  view: AgentViewState;
+  onContinueSession: (sessionId: string) => void;
+}) {
+  const sessionIdFromRun = agentSessionId(view);
   const refreshKey = agentViewDebugEvents(view).length;
   const [selectedSessionId, setSelectedSessionId] = useState<
     string | undefined
-  >(runId);
+  >(sessionIdFromRun);
   const [listFetchState, setListFetchState] =
     useState<AgentSessionListFetchState>({
       status: 'idle',
@@ -1805,10 +1861,10 @@ function AgentSessionView({ view }: { view: AgentViewState }) {
   });
 
   useEffect(() => {
-    if (runId !== undefined) {
-      setSelectedSessionId(runId);
+    if (sessionIdFromRun !== undefined) {
+      setSelectedSessionId(sessionIdFromRun);
     }
-  }, [runId]);
+  }, [sessionIdFromRun]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1848,7 +1904,7 @@ function AgentSessionView({ view }: { view: AgentViewState }) {
     return () => {
       cancelled = true;
     };
-  }, [runId]);
+  }, [sessionIdFromRun]);
 
   useEffect(() => {
     if (selectedSessionId === undefined) {
@@ -1916,6 +1972,15 @@ function AgentSessionView({ view }: { view: AgentViewState }) {
       <div className="sectionHeader">
         <span>Session JSONL</span>
         <code>{selectedSessionId ?? 'no session selected'}</code>
+        {selectedSessionId === undefined ? null : (
+          <button
+            type="button"
+            className="secondaryButton continueSessionButton"
+            onClick={() => onContinueSession(selectedSessionId)}
+          >
+            Continue this session
+          </button>
+        )}
       </div>
       <div className="sessionBrowser">
         <div className="sessionList">
@@ -2292,9 +2357,11 @@ function AgentRunView({
 function AgentInspectorView({
   view,
   page,
+  onContinueSession,
 }: {
   view: AgentViewState;
   page: AgentPageMode;
+  onContinueSession: (sessionId: string) => void;
 }) {
   if (page === 'debug') {
     if (view.status === 'idle') {
@@ -2326,7 +2393,7 @@ function AgentInspectorView({
   if (page === 'session') {
     return (
       <div className="resultStack">
-        <AgentSessionView view={view} />
+        <AgentSessionView view={view} onContinueSession={onContinueSession} />
       </div>
     );
   }
@@ -2457,6 +2524,7 @@ function AgentInspectorPanel({
   agentPage,
   agentView,
   onAgentPageChange,
+  onContinueSession,
 }: AgentInspectorPanelProps) {
   return (
     <aside className="inspectorColumn" aria-live="polite">
@@ -2467,7 +2535,11 @@ function AgentInspectorPanel({
         </div>
         <AgentPageSwitcher page={agentPage} onPageChange={onAgentPageChange} />
       </div>
-      <AgentInspectorView view={agentView} page={agentPage} />
+      <AgentInspectorView
+        view={agentView}
+        page={agentPage}
+        onContinueSession={onContinueSession}
+      />
     </aside>
   );
 }
@@ -2521,6 +2593,7 @@ export function ChatPlayground() {
           temperature: optionalText(state.agentForm.temperature),
           approvalPolicy: state.agentForm.approvalPolicy,
           sandboxMode: state.agentForm.sandboxMode,
+          sessionId: optionalText(state.agentForm.sessionId),
         },
         {
           onStep: (event) => {
@@ -2633,6 +2706,8 @@ export function ChatPlayground() {
   }
 
   const currentRunId = agentRunId(state.agentView);
+  const currentSessionId = agentSessionId(state.agentView);
+  const currentRunResumed = agentRunResumed(state.agentView);
 
   return (
     <main className="appShell agentWorkbench">
@@ -2660,10 +2735,17 @@ export function ChatPlayground() {
             </strong>
             <span>{modelLabel(state.mode, state)}</span>
             <small>{currentRunId ?? 'no run id yet'}</small>
+            {currentRunResumed ? (
+              <small className="resumedBadge">
+                continuing session {currentSessionId === undefined
+                  ? ''
+                  : sessionShortId(currentSessionId)}
+              </small>
+            ) : null}
           </div>
         </section>
         <SessionRail
-          activeRunId={currentRunId}
+          activeRunId={currentSessionId}
           onOpenSessions={() =>
             dispatch({
               type: 'agentPageChanged',
@@ -2755,6 +2837,12 @@ export function ChatPlayground() {
                   value: value,
                 })
               }
+              onSessionIdChange={(value) =>
+                dispatch({
+                  type: 'agentSessionIdChanged',
+                  value: value,
+                })
+              }
             />
           ) : (
             <ChatForm
@@ -2793,6 +2881,12 @@ export function ChatPlayground() {
             dispatch({
               type: 'agentPageChanged',
               page: page,
+            })
+          }
+          onContinueSession={(sessionId) =>
+            dispatch({
+              type: 'agentSessionIdChanged',
+              value: sessionId,
             })
           }
         />

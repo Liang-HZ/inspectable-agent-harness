@@ -113,14 +113,18 @@ reconstructed on resume).
 
 ### Session Replay
 
-JSONL sessions exist, but replay does not.
+Now implemented (see chapter 20): a `sessionId` input field lets the same
+JSONL session be continued more than once, `resumeAgentSession` reconstructs
+model-visible history from the response-item records, and
+`normalizeAgentResponseItemHistory` repairs orphan `function_call` items left
+by a mid-turn crash. Resume only writes new content back to disk (the
+synthesized outputs from normalization plus the new user message), never the
+whole history.
 
-Replay will need to reconstruct:
-
-- run metadata
-- turn context
-- response-item history
-- missing tool outputs if a crash happened mid-turn
+Still missing: the non-streaming `/api/agent` route has no session concept;
+there is no way to fork a new session from a point in history (Codex's
+`fork`); the Session panel still shows a single flat JSONL stream without
+visually separating turns.
 
 ### Context Compaction
 

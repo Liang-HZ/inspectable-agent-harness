@@ -27,6 +27,7 @@ import {
   appendAgentSessionEvent,
   appendAgentTurnContext,
   createAgentSession,
+  resumeAgentSession,
   type AgentSession,
 } from './agent-session-store';
 import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
@@ -203,6 +204,63 @@ function createInitialResponseItems(prompt: string): AgentResponseItem[] {
       content: prompt,
     },
   ];
+}
+
+export type AgentSessionInitResult = {
+  session: AgentSession;
+  history: AgentResponseItem[];
+  sessionId: string;
+  resumed: boolean;
+  newItemsToPersist: AgentResponseItem[];
+};
+
+export function initializeAgentSessionForStream(
+  input: AgentInput,
+  context: AgentRunContext,
+  config: ModelConfig,
+  prompt: string,
+): AgentSessionInitResult {
+  if (input.sessionId === undefined) {
+    const session = createAgentSession({
+      id: context.runId,
+      cwd: process.cwd(),
+      source: 'api_agent_stream',
+      modelProvider: 'openai-compatible',
+      model: config.model,
+      baseURL: config.baseURL,
+      wireApi: config.wireApi,
+      policy: context.policy,
+    });
+    const history = createInitialResponseItems(prompt);
+
+    return {
+      session: session,
+      history: history,
+      sessionId: session.id,
+      resumed: false,
+      newItemsToPersist: history,
+    };
+  }
+
+  const resumeResult = resumeAgentSession(input.sessionId);
+
+  if (!resumeResult.ok) {
+    throw new Error(resumeResult.error);
+  }
+
+  const newUserItem: AgentResponseItem = {
+    type: 'message',
+    role: 'user',
+    content: prompt,
+  };
+
+  return {
+    session: resumeResult.session,
+    history: [...resumeResult.history, newUserItem],
+    sessionId: resumeResult.session.id,
+    resumed: true,
+    newItemsToPersist: [...resumeResult.synthesizedItems, newUserItem],
+  };
 }
 
 function createToolOutputItem(
@@ -644,16 +702,14 @@ export async function runAgentStream(
 ): Promise<AgentResult> {
   const context = createAgentRunContextForInput(input, contextInput);
   const modelGateway = createAgentModelGateway(config, context);
-  const session = createAgentSession({
-    id: context.runId,
-    cwd: process.cwd(),
-    source: 'api_agent_stream',
-    modelProvider: 'openai-compatible',
-    model: config.model,
-    baseURL: config.baseURL,
-    wireApi: config.wireApi,
-    policy: context.policy,
-  });
+  const prompt = buildAgentPrompt(input);
+  const sessionInit = initializeAgentSessionForStream(
+    input,
+    context,
+    config,
+    prompt,
+  );
+  const { session, history, sessionId, resumed } = sessionInit;
   appendAgentTurnContext(session, {
     turnId: context.runId,
     model: config.model,
@@ -663,9 +719,7 @@ export async function runAgentStream(
     temperature: input.temperature,
   });
   let runState = createAgentRunState(context.runId);
-  const prompt = buildAgentPrompt(input);
   const steps: AgentStep[] = [];
-  const history = createInitialResponseItems(prompt);
   const modelCallUsages: AgentModelCallUsage[] = [];
 
   function emitAgentEvent(event: AgentEvent): void {
@@ -675,13 +729,16 @@ export async function runAgentStream(
     logAgentEvent(context.runId, event);
   }
 
-  logAgentInfo(context.runId, 'session_created', {
+  logAgentInfo(context.runId, resumed ? 'session_resumed' : 'session_created', {
     path: session.path,
+    sessionId: sessionId,
   });
 
   emitAgentEvent({
     type: 'run_started',
     runId: context.runId,
+    sessionId: sessionId,
+    resumed: resumed,
     policy: context.policy,
   });
 
@@ -698,7 +755,7 @@ export async function runAgentStream(
     promptLength: prompt.length,
   });
 
-  appendExistingResponseItemsToSession(history, session);
+  appendExistingResponseItemsToSession(sessionInit.newItemsToPersist, session);
   const samplingResult = await runSamplingLoop(
     modelGateway,
     input,

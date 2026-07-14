@@ -27,6 +27,7 @@ export type AgentRequestBody = {
   temperature: string | undefined;
   approvalPolicy: AgentApprovalPolicy | undefined;
   sandboxMode: AgentSandboxMode | undefined;
+  sessionId: string | undefined;
 };
 
 export const agentStepSchema = z.strictObject({
@@ -83,6 +84,8 @@ export type AgentDebugStreamEvent =
   | {
       type: 'runStarted';
       runId: string;
+      sessionId: string;
+      resumed: boolean;
       policy: AgentRunPolicy;
     }
   | {
@@ -200,6 +203,7 @@ export const agentInputValidationErrorsSchema = z.strictObject({
     temperature: z.array(z.string()).optional(),
     approvalPolicy: z.array(z.string()).optional(),
     sandboxMode: z.array(z.string()).optional(),
+    sessionId: z.array(z.string()).optional(),
   }),
 });
 

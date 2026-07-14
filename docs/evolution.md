@@ -931,6 +931,49 @@ process is treated as a denial. The full audit trail still lands in the
 session JSONL, since both approval events are ordinary recorded agent
 events.
 
+## Phase 28: Session Replay And Resume
+
+Since Phase 8, `session.id` and `context.runId` had always been the same
+value: every `/api/agent/stream` call created a brand-new session containing
+exactly one turn. The JSONL store was a single-turn audit log, not yet a
+conversation that could be continued.
+
+`AgentInput` gained an optional `sessionId` field, decoupling session
+identity (stable across turns) from run identity (fresh per turn, as
+before). `run_started` now carries both `sessionId` and `resumed`.
+
+Added two functions to `lib/agent-session-store.ts`:
+
+- `normalizeAgentResponseItemHistory(items)`: both OpenAI wire protocols
+  require every tool call to have a matching tool response. A crash between
+  committing a `function_call` and its `function_call_output` leaves an
+  orphan; this inserts a synthesized `function_call_output`
+  (`isError: true`, reusing the original `callId`) after any orphan call.
+- `resumeAgentSession(sessionId)`: finds the session file, reads every
+  `response_item` record in write order, normalizes it, and returns the
+  reconstructed history without writing a new `session_meta`.
+
+`lib/agent.ts` gained `initializeAgentSessionForStream` (exported for tests),
+the single place deciding fresh vs. resumed session behavior. It separates
+`history` (the full history sent to the model) from `newItemsToPersist` (only
+the actually-new content written to disk) — for a resumed session that is
+just the normalization's synthesized outputs plus the new user message,
+never the whole reconstructed history. This keeps repeated resumes from
+making the JSONL file grow superlinearly. Resuming an unknown `sessionId`
+throws rather than silently starting a new session.
+
+The frontend Session panel gained a "Continue this session" button that
+writes the session id into the Agent form; the composer then shows a
+"Continuing session ..." banner with a way to clear it. The sidebar's
+session highlighting switched from `runId`-based to `sessionId`-based, so it
+keeps highlighting the same conversation across turns.
+
+Verified end to end through the real HTTP route (not just unit tests): a
+second turn against an existing session correctly appended a new
+`turn_context` (not a duplicate `session_meta`), and the resulting
+`model_requested` event showed the model receiving all three accumulated
+messages (system + both turns' user messages) instead of just the new one.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core
@@ -940,7 +983,8 @@ rather than bypass it:
 - more OpenAI-compatible providers
 - OS-level sandbox enforcement
 - durable (JSONL-persisted) pending approvals that survive a process restart
-- session replay / multi-turn resume
+- session resume for the non-streaming `/api/agent` route
+- forking a new session from a point in an existing session's history
 - context compaction
 - user input during a run
 - retry policy

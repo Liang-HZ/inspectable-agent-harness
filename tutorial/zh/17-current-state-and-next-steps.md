@@ -101,14 +101,15 @@ state 也写入 JSONL 并在 resume 时重建）。
 
 ### Session Replay
 
-JSONL sessions 已经存在，但 replay 还没有。
+已经实现（见第 20 章）：`sessionId` 输入字段让同一个 JSONL session 可以被多次
+继续,`resumeAgentSession` 从 response-item 记录重建 model-visible history,
+`normalizeAgentResponseItemHistory` 修复 mid-turn crash 留下的孤儿
+function_call。resume 只把新增内容(normalize 产生的 synthesized output、新的
+user 消息)写回磁盘,不会重写整段历史。
 
-Replay 需要重建：
-
-- run metadata
-- turn context
-- response-item history
-- 如果 crash 发生在 mid-turn，要 normalize missing tool outputs
+仍然缺的：非流式 `/api/agent` 路由没有 session 概念;没有从历史中间"分叉"出
+新会话的能力(Codex 的 `fork`);Session 面板还是一条扁平的 JSONL 流,不单独
+可视化"第几轮"。
 
 ### Context Compaction
 

@@ -33,6 +33,8 @@ export type AgentEvent =
   | {
       type: 'run_started';
       runId: string;
+      sessionId: string;
+      resumed: boolean;
       policy: AgentRunPolicy;
     }
   | {
@@ -115,6 +117,7 @@ export type AgentEvent =
 
 export type AgentRunState = {
   runId: string;
+  sessionId: string | undefined;
   status: AgentRunStatus;
   events: AgentEvent[];
   steps: AgentStep[];
@@ -128,6 +131,7 @@ export type AgentRunState = {
 export function createAgentRunState(runId: string): AgentRunState {
   return {
     runId: runId,
+    sessionId: undefined,
     status: 'running',
     events: [],
     steps: [],
@@ -150,6 +154,7 @@ export function applyAgentEvent(
       ...state,
       status: 'running',
       events: events,
+      sessionId: event.sessionId,
       policy: event.policy,
     };
   }

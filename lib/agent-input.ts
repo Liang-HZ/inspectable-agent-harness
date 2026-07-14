@@ -110,6 +110,7 @@ export const agentInputSchema = z.strictObject(
     temperature: optionalTemperatureSchema,
     approvalPolicy: optionalAgentApprovalPolicySchema,
     sandboxMode: optionalAgentSandboxModeSchema,
+    sessionId: optionalTrimmedStringSchema,
   },
   {
     error: (issue) =>

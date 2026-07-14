@@ -1135,11 +1135,43 @@ Current guarantees:
 - streaming agent runs persist `response_item` rows for system/user messages,
   function calls, function-call outputs, and final assistant messages
 
+Session resume now exists (chapter 20). `AgentInput.sessionId` decouples
+session identity (stable across turns) from `context.runId` (fresh per turn).
+`lib/agent-session-store.ts` owns two additional functions:
+
+```text
+normalizeAgentResponseItemHistory(items)
+  ensures every function_call has a matching function_call_output; a crash
+  between committing a tool call and its output leaves an orphan, so this
+  inserts a synthesized function_call_output (isError: true, reusing the
+  original callId) after any orphan function_call
+
+resumeAgentSession(sessionId)
+  finds the session file, reads every response_item record in write order,
+  runs normalizeAgentResponseItemHistory, and returns the reconstructed
+  history plus the session handle -- without writing a new session_meta record
+```
+
+`lib/agent.ts`'s `initializeAgentSessionForStream` (exported for tests) is
+the single place that decides fresh-session vs. resumed-session behavior. It
+returns both the full `history` sent to the model and a separate
+`newItemsToPersist`: for a fresh session these are the same two items
+(system + user); for a resumed session, `newItemsToPersist` is only the
+normalization's synthesized outputs plus the new user message. The full
+reconstructed history is never re-appended to the file, so resuming a session
+repeatedly does not make the JSONL file grow superlinearly. Resuming an
+unknown `sessionId` throws rather than silently starting a new session, so
+the failure surfaces as an SSE `error` event instead of a silent new
+conversation.
+
 Current limitations:
 
-- no resume API yet
-- no compaction rows yet
-- no model-history reconstruction yet
+- resume only exists for the streaming route; the non-streaming `/api/agent`
+  route has no session concept and never persists
+- no compaction rows yet -- resumed history is sent to the model verbatim, so
+  token usage grows with turn count until compaction exists (a future
+  chapter)
+- no way to fork a new session from a point in history (Codex's `fork`)
 - approval pause/resume (chapter 19) works within a live run, but pending
   approval state is process memory only and is not persisted to JSONL, so it
   cannot survive a process restart or be recovered by a resume API
@@ -1150,7 +1182,7 @@ Future session work should add:
 ```text
 event_msg          UI/internal events that are not model-visible
 compacted           summary plus optional replacement history
-resume API           reconstruct AgentRunState and model history from JSONL
+session fork        branch a new session from a point in an existing session's history
 durable approvals   persist pending approval state so it survives a restart
 ```
 
@@ -1228,13 +1260,13 @@ The current implementation is intentionally small:
 
 Future work should grow the harness in this order:
 
-1. add session replay/resume for multi-turn conversations
-2. add context compaction and history reconstruction
-3. enforce OS-level sandboxing under the existing path/permission boundaries
-4. add richer tools and MCP-style external tool registration
+1. add context compaction and history reconstruction
+2. enforce OS-level sandboxing under the existing path/permission boundaries
+3. add richer tools and MCP-style external tool registration
 
-Already done: interactive approval pause/resume (chapter 19) and a shell tool
-behind a safe-command classifier (chapter 18).
+Already done: interactive approval pause/resume (chapter 19), a shell tool
+behind a safe-command classifier (chapter 18), and session replay/resume for
+multi-turn conversations (chapter 20).
 
 ## Maintenance Rule
 

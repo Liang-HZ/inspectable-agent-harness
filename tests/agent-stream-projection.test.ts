@@ -8,6 +8,8 @@ test('projects run policy into run-started debug stream events', () => {
   const event: AgentEvent = {
     type: 'run_started',
     runId: 'run-policy-1',
+    sessionId: 'run-policy-1',
+    resumed: false,
     policy: {
       approvalPolicy: 'never',
       sandboxMode: 'workspace_write',
@@ -19,6 +21,8 @@ test('projects run policy into run-started debug stream events', () => {
     event: {
       type: 'runStarted',
       runId: 'run-policy-1',
+      sessionId: 'run-policy-1',
+      resumed: false,
       policy: event.policy,
     },
   });
