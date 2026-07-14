@@ -34,6 +34,7 @@ Chinese mirror: [../zh/README.md](../zh/README.md)
 | [19](19-approval-pause-and-resume.md) | Approval pause and resume | Turn an `ask` decision from an immediate failure into a suspend-and-wait that resumes after approval or denial. |
 | [20](20-session-replay-and-resume.md) | Session replay and resume | Turn a single-turn JSONL session into a real multi-turn conversation that can be continued. |
 | [21](21-context-compaction.md) | Context compaction | Compact history automatically once a token threshold is reached, so long conversations don't grow without bound. |
+| [22](22-frontend-dark-mode-and-polish.md) | Frontend dark mode and polish | Add system-level dark mode and verify the Agent/Chat workbench page by page. |
 
 ## How To Read
 
@@ -43,7 +44,8 @@ why this repo values explicit boundaries and inspectability.
 If you want the current agent runtime, read chapters 08 through 16 plus 18
 through 21. They cover the provider-neutral loop, real tools, debug surface,
 session records, loop guardrails, the shell boundary, approval pause/resume,
-session resume, and context compaction.
+session resume, and context compaction. Chapter 22 is frontend polish,
+independent of the runtime evolution thread, and can be read on its own.
 
 If you are adding the next capability, read chapter 17 before implementing it.
 The next layer should follow the same discipline: define the boundary, expose

@@ -1555,8 +1555,7 @@ function HistoryCompactionDebugView({
         <div>
           <h3>Compaction {index + 1}</h3>
           <span>
-            {event.removedItemCount} item(s) removed, {event.keptItemCount}{' '}
-            kept
+            {event.removedItemCount} item(s) removed, {event.keptItemCount} kept
           </span>
         </div>
         <strong className="toolStatus askToolStatus">
@@ -1566,9 +1565,7 @@ function HistoryCompactionDebugView({
       <p className="auditReason">{event.reason}</p>
       <details className="debugDetails">
         <summary>Summary sent to the model</summary>
-        <pre className="debugTextBlock fullDebugTextBlock">
-          {event.summary}
-        </pre>
+        <pre className="debugTextBlock fullDebugTextBlock">{event.summary}</pre>
       </details>
     </article>
   );
@@ -2803,22 +2800,25 @@ export function ChatPlayground() {
             <small>{currentRunId ?? 'no run id yet'}</small>
             {currentRunResumed ? (
               <small className="resumedBadge">
-                continuing session {currentSessionId === undefined
+                continuing session{' '}
+                {currentSessionId === undefined
                   ? ''
                   : sessionShortId(currentSessionId)}
               </small>
             ) : null}
           </div>
         </section>
-        <SessionRail
-          activeRunId={currentSessionId}
-          onOpenSessions={() =>
-            dispatch({
-              type: 'agentPageChanged',
-              page: 'session',
-            })
-          }
-        />
+        {state.mode === 'agent' ? (
+          <SessionRail
+            activeRunId={currentSessionId}
+            onOpenSessions={() =>
+              dispatch({
+                type: 'agentPageChanged',
+                page: 'session',
+              })
+            }
+          />
+        ) : null}
       </aside>
 
       <section className="conversationColumn">

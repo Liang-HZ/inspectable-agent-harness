@@ -140,6 +140,17 @@ lib/agent.ts                        Tool-using agent orchestration service
 It should not read `process.env`, create an OpenAI SDK client, or know how the
 server talks to the model provider.
 
+`app/globals.css` owns presentation, including a semantic CSS custom-property
+palette on `:root` (`--page-bg`, `--surface`, `--text-strong`, `--accent`,
+`--danger`/`--warning`/`--success` groups, and their variants) with dark
+equivalents under `@media (prefers-color-scheme: dark)`. There is no manual
+theme toggle; the page follows the OS/browser color-scheme preference. A
+consolidated dark-mode override block near the end of the file wins over
+earlier breakpoint-scoped redefinitions of the same selectors and flattens a
+handful of decorative gradients that don't invert cleanly with the variables
+alone. See tutorial chapter 22 for the full design and the pitfalls found
+while converting the existing hardcoded colors.
+
 ### Browser API Client
 
 `lib/chat-api-client.ts` owns the `fetch('/api/chat')` call and response shape

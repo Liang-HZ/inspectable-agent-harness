@@ -1015,6 +1015,49 @@ The compaction threshold (`DEFAULT_COMPACTION_TOKEN_THRESHOLD = 8000`) is a
 fixed constant, not derived from any real model's context window, since
 `ModelConfig` doesn't track that metadata yet.
 
+## Phase 30: Frontend Dark Mode And Polish
+
+With the backend gaps from chapter 17 closed, this phase went back over the
+frontend, which had never had dark mode and had accumulated real
+inconsistencies across `app/globals.css` (2500+ lines, the same component
+styles redefined per breakpoint, 150+ distinct hardcoded hex colors).
+
+Defined a semantic CSS custom-property palette on `:root` (page/surface
+backgrounds, text levels, accent variants, danger/warning/success groups),
+with dark equivalents inside `@media (prefers-color-scheme: dark)`. A
+scripted pass converted the ~20 highest-frequency colors (covering the
+majority of the file's visual surface) to `var(...)` references.
+
+Rendering the result under a simulated dark color scheme immediately
+exposed invisible text where a script-based approach silently failed:
+multi-line `background` declarations (colors split across lines never
+matched a per-line "does this line say background" heuristic), `rgba(...)`
+literals (the conversion only matched `#RRGGBB` hex), and gradients layered
+on top of an already-converted flat color (the flat color went dark, but a
+white gradient sitting on top of it didn't). Also found: five places
+(`.primaryButton`, `.approveButton`, and others) used `#ffffff` as
+high-contrast button text, which the value-based script had conflated with
+`#ffffff` used for panel backgrounds -- both got mapped to the same
+`--surface` variable, so button text went dark along with panel
+backgrounds. Fixed by adding a dedicated `--accent-contrast` variable and
+by appending one consolidated dark-mode override block at the end of the
+file (placed last so it wins over the breakpoint-scoped redefinitions of
+the same selectors).
+
+Also fixed: the `SessionRail` sidebar (agent session list, "continue this
+session") was showing in Chat mode, where sessions don't apply -- now
+conditional on `state.mode === 'agent'`.
+
+No manual light/dark toggle was added -- `prefers-color-scheme` alone covers
+the situation that matters (the OS is set to dark, so this tool should be
+too) at a fraction of the implementation cost of a toggle with
+flash-of-wrong-theme prevention and persisted state.
+
+Verified page by page in a real browser (not just by reading the CSS diff):
+the Agent workbench, all three inspector tabs (Debug/Audit/Session), Chat
+mode, the approval card and compaction card (via temporarily injected fake
+state), and the mobile-width layout, in both light and dark.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core
