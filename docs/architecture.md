@@ -31,6 +31,7 @@ flowchart TD
   BrowserClient --> ChatRoute[app/api/chat/route.ts]
   AgentBrowserClient --> AgentRoute[app/api/agent/route.ts]
   AgentBrowserClient --> AgentStreamRoute[app/api/agent/stream/route.ts]
+  AgentBrowserClient --> AgentApprovalsRoute[app/api/agent/approvals/.../route.ts]
 
   ChatRoute --> ChatInput[lib/chat-input.ts]
   ChatRoute --> Env[lib/env.ts]
@@ -51,8 +52,12 @@ flowchart TD
   ModelDialect --> ResponsesDialect[lib/openai-responses-dialect.ts]
   AgentService --> ToolRuntime[lib/agent-tool-runtime.ts]
   ToolRuntime --> AgentTools[lib/agent-tools.ts]
+  ToolRuntime --> AgentApprovals[lib/agent-approvals.ts]
+  AgentApprovalsRoute --> AgentApprovals
   AgentTools --> BuiltinTools[lib/agent-builtins.ts]
   AgentTools --> EditingBuiltins[lib/agent-editing-builtins.ts]
+  AgentTools --> ShellBuiltins[lib/agent-shell-builtins.ts]
+  ShellBuiltins --> ShellSafety[lib/agent-shell-safety.ts]
 
   ChatService --> OpenAIClient[lib/openai-compatible-client.ts]
   ModelGateway --> OpenAIClient
@@ -82,6 +87,8 @@ app/api/agent/route.ts              HTTP entry point for /api/agent
 app/api/agent/stream/route.ts       SSE entry point for /api/agent/stream
 app/api/agent/sessions/route.ts     HTTP entry point for listing agent sessions
 app/api/agent/sessions/[id]/route.ts HTTP entry point for reading one agent session
+app/api/agent/approvals/route.ts    HTTP entry point for listing pending approvals
+app/api/agent/approvals/[runId]/[toolCallId]/route.ts HTTP entry point for resolving one pending approval
 lib/agent-api-client.ts             Browser-side agent fetch wrapper
 lib/agent-api-types.ts              Shared agent API request/response types
 lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
@@ -89,6 +96,8 @@ lib/agent-model-types.ts            Provider-neutral model request/response/even
 lib/agent-model-stages.ts           Shared model-call stage constants
 lib/agent-usage.ts                  Token usage normalization and aggregation
 lib/agent-input.ts                  Zod agent request body parsing and validation
+lib/agent-approval-input.ts         Zod approval decision request body parsing and validation
+lib/agent-approvals.ts              In-process pending approval registry and wait/resolve API
 lib/agent-permissions.ts            Approval policy, sandbox mode, and permission decisions
 lib/agent-run-context.ts            Agent run lifecycle context and cancellation checks
 lib/agent-events.ts                 Agent runtime event and run state types
@@ -100,6 +109,8 @@ lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Agent tool groups and registry
 lib/agent-builtins.ts               Built-in read-only local file tools
 lib/agent-editing-builtins.ts       Built-in write/edit local file tools
+lib/agent-shell-builtins.ts         Built-in shell tool
+lib/agent-shell-safety.ts           Safe-command classifier for the shell tool
 lib/model-provider-dialect.ts       Provider dialect contract
 lib/openai-tool-schema.ts           OpenAI strict tool-schema adapter
 lib/openai-chat-completions-dialect.ts OpenAI Chat Completions dialect adapter
@@ -267,12 +278,17 @@ and projects them into a three-zone workbench:
   commit layer is where `runtimeRole: "working_message" | "final_response"`
   appears.
 
-The browser remains an observer; it does not execute tools or call the model.
+The browser is an observer for everything except approval decisions: it does
+not execute tools or call the model, but it can approve or deny a suspended
+tool call through `POST /api/agent/approvals/{runId}/{toolCallId}`, which
+directly unblocks or fails that call inside the runtime.
 
 `tool_permission_decided` records each runtime permission decision.
-`approval_requested` records that a tool call needs user approval, but
-interactive approval resume is not
-implemented yet.
+`approval_requested` records that a tool call needs user approval, and (under
+`/api/agent/stream`, which runs with `approvalMode: 'interactive'`) actually
+suspends the tool call until the user approves or denies it, or the wait
+times out. `approval_resolved` records how it was resolved. See chapter 19 of
+the tutorial for the full design.
 
 `lib/agent-model-stages.ts` owns the shared model-call stage names used by
 events and usage records. This avoids redefining string stage names separately
@@ -454,8 +470,9 @@ answer model call.
 
 `AgentRunState` is a small derived state object built by applying events in
 order. It is not persistent yet. Its purpose is to make future cancellation,
-retry, approval, user-input, and resume behavior hang from one runtime model
-instead of scattered callbacks.
+retry, user-input, and resume behavior hang from one runtime model instead of
+scattered callbacks. Approval pause/resume (chapter 19) already uses this
+event stream; `waiting_for_approval` is a real `AgentRunStatus` value.
 
 `lib/model-gateway.ts` owns model provider calls for agent runs.
 
@@ -473,8 +490,11 @@ events, executes concrete tool handlers, and returns tool execution results.
 This keeps `lib/agent.ts` focused on orchestration instead of tool lifecycle
 details. It also owns the model-facing tool output serialization boundary:
 internal tool output is structured, but `function_call_output.output` is plain
-text. Later versions can add retries, interactive approval resume, and richer
-output validation at this boundary.
+text. When a decision is `ask` and `context.approvalMode === 'interactive'`,
+the runtime suspends on `lib/agent-approvals.ts` until the user approves,
+denies, or the wait times out or the run aborts (see chapter 19). Later
+versions can add richer output validation at this boundary and an "approved
+for session" shortcut.
 
 Tool output uses three internal variants:
 
@@ -757,8 +777,12 @@ timeouts, in-flight aborts, or handler exceptions become plain-text
 `function_call_output` records. The model sees text such as
 `Error [PATH_NOT_FOUND]: ...`, not an `ok/error` JSON envelope. That keeps the
 model loop recoverable while preserving structured `details` in runtime events
-and steps. Permission pauses and denied policy decisions remain fail-closed
-until approval resume exists.
+and steps. Denied policy decisions always return a recoverable
+`function_call_output`. Permission pauses (`ask`) resume interactively under
+`approvalMode: 'interactive'` (chapter 19); a denial there also returns a
+recoverable `Error [APPROVAL_DENIED]: ...` output instead of throwing. Other
+contexts (`approvalMode: 'fail_closed'`, the default) still fail closed by
+throwing `AgentApprovalRequiredError`.
 
 The first production-shaped tool foundation was read-only local file
 exploration; editing and shell layered on top of the same boundaries later. The
@@ -786,7 +810,9 @@ numbers, truncation flags, and match arrays for logs/UI/debugging.
 ## Streaming UI Flow
 
 The streaming path keeps the agent runtime on the server and uses React as an
-observer of the run. The browser does not execute tools or call the model.
+observer of the run. The browser does not execute tools or call the model,
+though it can approve or deny a suspended tool call (see "Approval Pause
+Semantics" below).
 
 ```mermaid
 sequenceDiagram
@@ -901,7 +927,7 @@ Tool annotations     What the tool says about its behavior
 Approval policy      Whether this run should auto-allow, ask, or deny
 Sandbox mode         What the execution environment can actually touch
 Hooks / guardian     Future dynamic policy layers
-User approval        Future interactive final decision
+User approval        Interactive final decision under approvalMode: 'interactive' (chapter 19)
 ```
 
 These layers must stay separate. A tool does not decide whether it may run. A
@@ -962,13 +988,19 @@ Current implementation status:
 - Known-safe tools are allowed.
 - Write-capable built-ins are denied under `sandboxMode=read_only`, allowed
   under `workspace_write` after path/precondition checks, and ask under
-  `approvalPolicy=strict` until approval resume exists.
+  `approvalPolicy=strict`.
 - Project-outside paths are denied before tool execution and returned to the
   model as recoverable tool errors.
 - Unknown, destructive, or open-world tools ask for approval.
-- Interactive approval resume is not implemented yet, so an `ask` decision emits
-  `approval_requested` and then raises `AgentApprovalRequiredError` as a
-  fail-closed placeholder.
+- Interactive approval resume exists (chapter 19): under
+  `approvalMode: 'interactive'` (set by `/api/agent/stream`), an `ask`
+  decision emits `approval_requested`, suspends on `lib/agent-approvals.ts`,
+  and resumes after `POST /api/agent/approvals/{runId}/{toolCallId}` approves
+  or denies it, or after a timeout/abort denies it. Contexts without
+  `approvalMode: 'interactive'` (the default, used by the non-streaming
+  `/api/agent` route) still raise `AgentApprovalRequiredError` as a
+  fail-closed placeholder, since there is no push channel to surface the
+  request to a user.
 - Sandbox mode is not an OS sandbox yet, but it now determines both the
   effective path access policy and the provider-visible built-in tool surface.
   `danger_full_access` widens path-declaring tools to absolute filesystem
@@ -991,11 +1023,11 @@ tool-level/user config override
   -> sandbox enforcement at execution time
 ```
 
-Every decision should remain auditable through event logs. Current decisions use
-`tool_permission_decided`; future interactive pauses use `approval_requested`.
-`AgentApprovalRequiredError` is not the final approval design. It only marks the
-current unsupported pause point until the runtime has session storage, approval
-responses, and resume support.
+Every decision remains auditable through event logs. Decisions use
+`tool_permission_decided`; interactive pauses use `approval_requested` and
+`approval_resolved`, both of which are persisted to the session JSONL like any
+other agent event. `AgentApprovalRequiredError` remains the fail-closed
+placeholder for contexts without an interactive approval channel (see below).
 
 Path denials are not approval pauses. They are terminal for that tool call but
 recoverable for the agent loop: the runtime emits `tool_permission_decided`
@@ -1023,9 +1055,23 @@ the policy decided.
 where tool execution cannot continue without an external approval response. This
 event moves `AgentRunState.status` to `waiting_for_approval`.
 
-The current runtime does not yet have a durable run store, an approval response
-API, or resume support. Because of that, an `ask` decision follows this
-fail-closed sequence:
+Under `approvalMode: 'interactive'` (see `lib/agent-run-context.ts`), an `ask`
+decision follows a real pause/resume protocol instead of failing closed:
+
+```text
+tool_permission_decided(ask)
+approval_requested                 -- projected as a first-class `approvalRequired` SSE event
+suspend on lib/agent-approvals.ts (in-process pending map, keyed by runId:toolCallId)
+POST /api/agent/approvals/{runId}/{toolCallId} { decision } resolves it
+  (or a 120s timeout, or the run's AbortSignal, resolves it as denied)
+approval_resolved                  -- projected as a first-class `approvalResolved` SSE event
+approved -> tool executes normally
+denied   -> recoverable `Error [APPROVAL_DENIED]: ...` function_call_output, loop continues
+```
+
+Contexts without `approvalMode: 'interactive'` (the default) keep the original
+fail-closed sequence, because there is no channel to deliver the approval
+request to a user:
 
 ```text
 tool_permission_decided(ask)
@@ -1033,20 +1079,14 @@ approval_requested
 throw AgentApprovalRequiredError
 ```
 
-This is a temporary bridge, not the final architecture. The error is explicit so
-callers can distinguish "approval is required but unsupported" from ordinary tool
-failure or policy denial.
-
-The final approval flow should replace this throw with a pause/resume protocol:
-
-```text
-tool_permission_decided(ask)
-approval_requested
-persist run state and pending tool call in JSONL session records
-return or stream waiting_for_approval to the client
-client/user approves or denies
-resume the same run from the pending tool call
-```
+Pending approval state lives in process memory only (a `Map` stashed on
+`globalThis` so it survives Next.js's route-level module instancing) and is
+not persisted to JSONL. A process restart is equivalent to a denial for any
+approval that was in flight — the same behavior Codex and Claude Code use.
+The full audit trail still exists, because `approval_requested` and
+`approval_resolved` are ordinary agent events written to the session JSONL.
+See tutorial chapter 19 for the full design and its tradeoffs, including what
+persisting pending state across restarts would require.
 
 `AgentPermissionDeniedError` is different. A `deny` decision is terminal for the
 current tool call and may fail the run immediately unless a future policy layer
@@ -1100,16 +1140,18 @@ Current limitations:
 - no resume API yet
 - no compaction rows yet
 - no model-history reconstruction yet
-- approval resume is not implemented yet
+- approval pause/resume (chapter 19) works within a live run, but pending
+  approval state is process memory only and is not persisted to JSONL, so it
+  cannot survive a process restart or be recovered by a resume API
 - session read/list APIs are for local inspection and debugging
 
 Future session work should add:
 
 ```text
-event_msg        UI/internal events that are not model-visible
-compacted        summary plus optional replacement history
-approval API     approve or deny a pending approval_requested event
-resume API       reconstruct AgentRunState and model history from JSONL
+event_msg          UI/internal events that are not model-visible
+compacted           summary plus optional replacement history
+resume API           reconstruct AgentRunState and model history from JSONL
+durable approvals   persist pending approval state so it survives a restart
 ```
 
 The next agent boundary can add these modules when the runtime needs them:
@@ -1169,7 +1211,8 @@ The current implementation is intentionally small:
   abort, per-tool timeouts, and a repeated-tool-call guard that stops identical
   tool name + arguments + output loops after three repeats.
 - `AgentPermissions` makes annotation-based approval decisions before tool
-  execution.
+  execution; `ask` decisions pause and resume interactively through
+  `AgentApprovals` when `approvalMode: 'interactive'` is set (chapter 19).
 - `AgentStreamProjection` maps runtime events to the current frontend SSE
   contract.
 - The frontend splits the same stream into a left session rail, center
@@ -1185,10 +1228,13 @@ The current implementation is intentionally small:
 
 Future work should grow the harness in this order:
 
-1. add interactive approval resume and user-input events
-2. enforce sandbox mode for file, shell, network, or external API tools
-3. add compaction and history reconstruction
+1. add session replay/resume for multi-turn conversations
+2. add context compaction and history reconstruction
+3. enforce OS-level sandboxing under the existing path/permission boundaries
 4. add richer tools and MCP-style external tool registration
+
+Already done: interactive approval pause/resume (chapter 19) and a shell tool
+behind a safe-command classifier (chapter 18).
 
 ## Maintenance Rule
 

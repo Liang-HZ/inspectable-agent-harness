@@ -16,6 +16,9 @@ tsconfig.tsbuildinfo
 *.local
 data/agent-sessions/
 
+# Local Claude Code permission settings (machine-specific, not shared project config)
+.claude/settings.local.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

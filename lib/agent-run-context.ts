@@ -5,16 +5,20 @@ import {
   type AgentRunPolicy,
 } from './agent-permissions';
 
+export type AgentApprovalMode = 'interactive' | 'fail_closed';
+
 export type AgentRunContextInput = {
   runId: string;
   signal?: AbortSignal;
   policy?: AgentRunPolicy;
+  approvalMode?: AgentApprovalMode;
 };
 
 export type AgentRunContext = {
   runId: string;
   signal: AbortSignal | undefined;
   policy: AgentRunPolicy;
+  approvalMode: AgentApprovalMode;
   toolState: AgentRunToolState;
 };
 
@@ -37,6 +41,7 @@ export function createAgentRunContext(
     runId: input.runId,
     signal: input.signal,
     policy: policy,
+    approvalMode: input.approvalMode ?? 'fail_closed',
     toolState: {
       readFilePaths: new Set<string>(),
     },

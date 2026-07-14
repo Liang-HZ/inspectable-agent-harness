@@ -94,10 +94,22 @@ Still missing:
 
 ### Approval Resume
 
-The current runtime can emit approval-needed events, but it cannot pause and
-resume after user approval.
+Now implemented (see chapter 19): under `interactive` approval mode, an `ask`
+decision suspends the tool-call promise, and
+`POST /api/agent/approvals/{runId}/{toolCallId}` approves or denies it to
+resume execution. A denial produces a model-visible recoverable error, so the
+loop continues instead of failing the run.
 
-That requires durable pending state in JSONL.
+Pending state lives in process memory (`Map<runId:toolCallId, resolver>`),
+not on disk — matching Codex and Claude Code: an approval is turn-scoped
+transient state, and a dead process counts as a denial. The full audit trail
+(who requested/approved/denied what, and when) already lands in the existing
+JSONL session event log, since `approval_requested`/`approval_resolved` are
+ordinary recorded events.
+
+Still missing: recovering pending approvals across a process restart (if that
+ever matters, pending state would also need to be written to JSONL and
+reconstructed on resume).
 
 ### Session Replay
 

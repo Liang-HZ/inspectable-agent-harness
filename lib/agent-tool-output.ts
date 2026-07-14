@@ -10,6 +10,7 @@ export type AgentToolErrorCode =
   | 'EDIT_TARGET_NOT_FOUND'
   | 'EDIT_TARGET_NOT_UNIQUE'
   | 'EDIT_OVERLAP'
+  | 'APPROVAL_DENIED'
   | 'TIMEOUT'
   | 'ABORTED'
   | 'REPEATED_TOOL_CALL'

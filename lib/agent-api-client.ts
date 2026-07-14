@@ -10,6 +10,12 @@ type AgentStreamCallbacks = {
   onAssistantDelta: (
     event: Extract<AgentStreamEvent, { type: 'assistantDelta' }>,
   ) => void;
+  onApprovalRequired: (
+    event: Extract<AgentStreamEvent, { type: 'approvalRequired' }>,
+  ) => void;
+  onApprovalResolved: (
+    event: Extract<AgentStreamEvent, { type: 'approvalResolved' }>,
+  ) => void;
   onDebug: (event: Extract<AgentStreamEvent, { type: 'debug' }>) => void;
   onDone: (event: Extract<AgentStreamEvent, { type: 'done' }>) => void;
   onError: (event: Extract<AgentStreamEvent, { type: 'error' }>) => void;
@@ -68,6 +74,44 @@ export async function requestAgentRun(
   }
 }
 
+export type AgentApprovalDecisionResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function submitAgentApprovalDecision(
+  runId: string,
+  toolCallId: string,
+  decision: 'approve' | 'deny',
+): Promise<AgentApprovalDecisionResult> {
+  try {
+    const response = await fetch(
+      `/api/agent/approvals/${encodeURIComponent(runId)}/${encodeURIComponent(toolCallId)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ decision: decision }),
+      },
+    );
+    const data = (await response.json()) as { ok: boolean; error?: string };
+
+    if (!response.ok || !data.ok) {
+      return {
+        ok: false,
+        error: data.error ?? 'Approval request failed.',
+      };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: errorMessage(error),
+    };
+  }
+}
+
 function readAgentStreamEvent(data: unknown): AgentStreamEvent | undefined {
   if (typeof data !== 'object' || data === null || !('type' in data)) {
     return undefined;
@@ -77,6 +121,8 @@ function readAgentStreamEvent(data: unknown): AgentStreamEvent | undefined {
   if (
     event.type === 'step' ||
     event.type === 'assistantDelta' ||
+    event.type === 'approvalRequired' ||
+    event.type === 'approvalResolved' ||
     event.type === 'debug' ||
     event.type === 'done' ||
     event.type === 'error'
@@ -98,6 +144,14 @@ function dispatchAgentStreamEvent(
 
     case 'assistantDelta':
       callbacks.onAssistantDelta(event);
+      return;
+
+    case 'approvalRequired':
+      callbacks.onApprovalRequired(event);
+      return;
+
+    case 'approvalResolved':
+      callbacks.onApprovalResolved(event);
       return;
 
     case 'debug':

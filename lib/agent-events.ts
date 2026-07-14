@@ -7,6 +7,7 @@ import type {
   AgentModelUsageSnapshot,
   AgentModelWireApi,
 } from './agent-model-types';
+import type { AgentApprovalResolution } from './agent-approvals';
 import type {
   AgentPermissionDecision,
   AgentPermissionRequest,
@@ -88,8 +89,16 @@ export type AgentEvent =
     }
   | {
       type: 'approval_requested';
+      runId: string;
       request: AgentPermissionRequest;
       decision: AgentPermissionDecision;
+    }
+  | {
+      type: 'approval_resolved';
+      runId: string;
+      toolCallId: string;
+      toolName: string;
+      resolution: AgentApprovalResolution;
     }
   | {
       type: 'run_succeeded';
@@ -225,6 +234,14 @@ export function applyAgentEvent(
     return {
       ...state,
       status: 'waiting_for_approval',
+      events: events,
+    };
+  }
+
+  if (event.type === 'approval_resolved') {
+    return {
+      ...state,
+      status: 'running_tool',
       events: events,
     };
   }

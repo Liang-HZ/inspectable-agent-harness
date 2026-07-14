@@ -9,6 +9,7 @@ import type {
   AgentModelUsageSnapshot,
   AgentModelWireApi,
 } from './agent-model-types';
+import type { AgentApprovalResolution } from './agent-approvals';
 import type {
   AgentApprovalPolicy,
   AgentPermissionDecision,
@@ -138,9 +139,23 @@ export type AgentDebugStreamEvent =
       decision: AgentPermissionDecision;
     }
   | {
+      type: 'approvalResolved';
+      toolCallId: string;
+      toolName: string;
+      resolution: AgentApprovalResolution;
+    }
+  | {
       type: 'runCancelled';
       reason: string;
     };
+
+export type AgentApprovalStreamRequest = {
+  runId: string;
+  toolCallId: string;
+  toolName: string;
+  argumentsJson: string;
+  reason: string;
+};
 
 export type AgentStreamEvent =
   | {
@@ -150,6 +165,17 @@ export type AgentStreamEvent =
   | {
       type: 'assistantDelta';
       delta: string;
+    }
+  | {
+      type: 'approvalRequired';
+      request: AgentApprovalStreamRequest;
+    }
+  | {
+      type: 'approvalResolved';
+      runId: string;
+      toolCallId: string;
+      toolName: string;
+      resolution: AgentApprovalResolution;
     }
   | {
       type: 'debug';

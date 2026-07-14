@@ -7,6 +7,7 @@ import type {
   AgentStep,
 } from '../lib/agent-api-types';
 import { runSamplingLoop } from '../lib/agent';
+import { resolveAgentApproval } from '../lib/agent-approvals';
 import type { AgentInput } from '../lib/agent-input';
 import type { AgentModelStreamEvent } from '../lib/agent-model-types';
 import type { AgentModelGateway } from '../lib/model-gateway';
@@ -549,4 +550,148 @@ test('rejects tool argument deltas without a completed tool call', async () => {
       ]),
     /Model streamed tool-call arguments but did not complete a tool call\./,
   );
+});
+
+test('resumes the loop after an interactive approval is granted', async () => {
+  const context = createAgentRunContext({
+    runId: 'test-run-interactive-approve',
+    approvalMode: 'interactive',
+    policy: { approvalPolicy: 'on_request', sandboxMode: 'workspace_write' },
+  });
+  const history = initialHistory();
+  const steps: AgentStep[] = [];
+  const events: AgentEvent[] = [];
+  const modelCallUsages: AgentModelCallUsage[] = [];
+
+  const resultPromise = runSamplingLoop(
+    createFakeGateway([
+      [
+        {
+          type: 'tool_call_committed',
+          toolCall: {
+            id: 'call-shell-1',
+            name: 'shell',
+            argumentsJson: JSON.stringify({ command: 'echo one; echo two' }),
+          },
+        },
+        { type: 'completed', model: 'fake-model', usage: usage },
+      ],
+      [
+        { type: 'text_delta', delta: 'Ran the command.' },
+        {
+          type: 'assistant_message_done',
+          message: { text: 'Ran the command.', providerPhase: null },
+        },
+        { type: 'completed', model: 'fake-model', usage: usage },
+      ],
+    ]),
+    baseInput,
+    context,
+    history,
+    steps,
+    modelCallUsages,
+    undefined,
+    (event) => {
+      events.push(event);
+
+      if (event.type === 'approval_requested') {
+        queueMicrotask(() => {
+          resolveAgentApproval(
+            event.runId,
+            event.request.toolCallId,
+            'approve',
+          );
+        });
+      }
+    },
+    undefined,
+  );
+
+  const result = await resultPromise;
+
+  assert.equal(result.answer, 'Ran the command.');
+  assert.equal(
+    events.some((event) => event.type === 'approval_requested'),
+    true,
+  );
+  const resolvedEvent = events.find(
+    (event) => event.type === 'approval_resolved',
+  );
+  assert.notEqual(resolvedEvent, undefined);
+  if (resolvedEvent?.type === 'approval_resolved') {
+    assert.equal(resolvedEvent.resolution.type, 'approved');
+  }
+
+  const toolOutput = history.find(
+    (item) => item.type === 'function_call_output',
+  );
+  assert.notEqual(toolOutput, undefined);
+  if (toolOutput?.type === 'function_call_output') {
+    assert.equal(toolOutput.isError, false);
+    assert.match(toolOutput.output, /Exit code: 0/);
+  }
+});
+
+test('resumes the loop with a recoverable error after an interactive denial', async () => {
+  const context = createAgentRunContext({
+    runId: 'test-run-interactive-deny',
+    approvalMode: 'interactive',
+    policy: { approvalPolicy: 'on_request', sandboxMode: 'workspace_write' },
+  });
+  const history = initialHistory();
+  const steps: AgentStep[] = [];
+  const events: AgentEvent[] = [];
+  const modelCallUsages: AgentModelCallUsage[] = [];
+
+  const resultPromise = runSamplingLoop(
+    createFakeGateway([
+      [
+        {
+          type: 'tool_call_committed',
+          toolCall: {
+            id: 'call-shell-1',
+            name: 'shell',
+            argumentsJson: JSON.stringify({ command: 'echo one; echo two' }),
+          },
+        },
+        { type: 'completed', model: 'fake-model', usage: usage },
+      ],
+      [
+        { type: 'text_delta', delta: 'The command was declined.' },
+        {
+          type: 'assistant_message_done',
+          message: { text: 'The command was declined.', providerPhase: null },
+        },
+        { type: 'completed', model: 'fake-model', usage: usage },
+      ],
+    ]),
+    baseInput,
+    context,
+    history,
+    steps,
+    modelCallUsages,
+    undefined,
+    (event) => {
+      events.push(event);
+
+      if (event.type === 'approval_requested') {
+        queueMicrotask(() => {
+          resolveAgentApproval(event.runId, event.request.toolCallId, 'deny');
+        });
+      }
+    },
+    undefined,
+  );
+
+  const result = await resultPromise;
+
+  assert.equal(result.answer, 'The command was declined.');
+  const toolOutput = history.find(
+    (item) => item.type === 'function_call_output',
+  );
+  assert.notEqual(toolOutput, undefined);
+  if (toolOutput?.type === 'function_call_output') {
+    assert.equal(toolOutput.isError, true);
+    assert.match(toolOutput.output, /APPROVAL_DENIED/);
+  }
 });

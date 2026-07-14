@@ -11,9 +11,13 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { requestAgentRunStream } from '../lib/agent-api-client';
+import {
+  requestAgentRunStream,
+  submitAgentApprovalDecision,
+} from '../lib/agent-api-client';
 import type {
   AgentApiResponse,
+  AgentApprovalStreamRequest,
   AgentDebugStreamEvent,
   AgentStep,
   AgentUsage,
@@ -80,6 +84,7 @@ type AgentViewState =
       steps: AgentStep[];
       debugEvents: AgentDebugStreamEvent[];
       model: string | null;
+      pendingApprovals: AgentApprovalStreamRequest[];
     }
   | {
       status: 'aborted';
@@ -177,6 +182,14 @@ type WorkbenchAction =
   | {
       type: 'agentDebugEventReceived';
       event: AgentDebugStreamEvent;
+    }
+  | {
+      type: 'agentApprovalRequiredReceived';
+      request: AgentApprovalStreamRequest;
+    }
+  | {
+      type: 'agentApprovalResolvedReceived';
+      toolCallId: string;
     }
   | {
       type: 'agentRunAborted';
@@ -424,6 +437,7 @@ function workbenchReducer(
           steps: [],
           debugEvents: [],
           model: null,
+          pendingApprovals: [],
         },
       };
 
@@ -463,6 +477,37 @@ function workbenchReducer(
         agentView: {
           ...state.agentView,
           debugEvents: [...state.agentView.debugEvents, action.event],
+        },
+      };
+
+    case 'agentApprovalRequiredReceived':
+      if (state.agentView.status !== 'streaming') {
+        return state;
+      }
+
+      return {
+        ...state,
+        agentView: {
+          ...state.agentView,
+          pendingApprovals: [
+            ...state.agentView.pendingApprovals,
+            action.request,
+          ],
+        },
+      };
+
+    case 'agentApprovalResolvedReceived':
+      if (state.agentView.status !== 'streaming') {
+        return state;
+      }
+
+      return {
+        ...state,
+        agentView: {
+          ...state.agentView,
+          pendingApprovals: state.agentView.pendingApprovals.filter(
+            (pending) => pending.toolCallId !== action.toolCallId,
+          ),
         },
       };
 
@@ -1129,6 +1174,8 @@ function eventLabel(event: AgentDebugStreamEvent): string {
       return `${event.request.toolName} ${event.decision.type}`;
     case 'approvalRequested':
       return `${event.request.toolName} approval requested`;
+    case 'approvalResolved':
+      return `${event.toolName} approval ${event.resolution.type}`;
     case 'runCancelled':
       return event.reason;
   }
@@ -2102,6 +2149,103 @@ function ChatReadyState({ form }: { form: ChatFormState }) {
   );
 }
 
+function formatApprovalArguments(argumentsJson: string): string {
+  try {
+    return JSON.stringify(JSON.parse(argumentsJson), null, 2);
+  } catch {
+    return argumentsJson;
+  }
+}
+
+type AgentApprovalDecisionState =
+  | { status: 'submitting' }
+  | { status: 'error'; error: string };
+
+function AgentApprovalBar({
+  pendingApprovals,
+}: {
+  pendingApprovals: AgentApprovalStreamRequest[];
+}) {
+  const [decisionState, setDecisionState] = useState<
+    Record<string, AgentApprovalDecisionState>
+  >({});
+
+  async function submitDecision(
+    request: AgentApprovalStreamRequest,
+    decision: 'approve' | 'deny',
+  ) {
+    setDecisionState((current) => ({
+      ...current,
+      [request.toolCallId]: { status: 'submitting' },
+    }));
+
+    const result = await submitAgentApprovalDecision(
+      request.runId,
+      request.toolCallId,
+      decision,
+    );
+
+    if (!result.ok) {
+      setDecisionState((current) => ({
+        ...current,
+        [request.toolCallId]: { status: 'error', error: result.error },
+      }));
+      return;
+    }
+
+    setDecisionState((current) => {
+      const next = { ...current };
+      delete next[request.toolCallId];
+      return next;
+    });
+  }
+
+  return (
+    <section className="approvalBar" aria-live="assertive">
+      {pendingApprovals.map((request) => {
+        const decision = decisionState[request.toolCallId];
+        const isSubmitting = decision?.status === 'submitting';
+
+        return (
+          <article className="approvalCard" key={request.toolCallId}>
+            <div className="approvalCardHeader">
+              <strong className="toolStatus askToolStatus">
+                Approval needed
+              </strong>
+              <code>{request.toolName}</code>
+            </div>
+            <p className="approvalReason">{request.reason}</p>
+            <pre className="approvalArguments">
+              {formatApprovalArguments(request.argumentsJson)}
+            </pre>
+            {decision?.status === 'error' ? (
+              <p className="approvalError">{decision.error}</p>
+            ) : null}
+            <div className="approvalActions">
+              <button
+                type="button"
+                className="approveButton"
+                disabled={isSubmitting}
+                onClick={() => submitDecision(request, 'approve')}
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                className="denyButton"
+                disabled={isSubmitting}
+                onClick={() => submitDecision(request, 'deny')}
+              >
+                Deny
+              </button>
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 function AgentRunView({
   view,
   form,
@@ -2126,6 +2270,9 @@ function AgentRunView({
 
   return (
     <div className="resultStack">
+      {view.status === 'streaming' && view.pendingApprovals.length > 0 ? (
+        <AgentApprovalBar pendingApprovals={view.pendingApprovals} />
+      ) : null}
       <AgentTranscript view={view} events={events} />
       <details className="stepShelf">
         <summary>
@@ -2394,6 +2541,26 @@ export function ChatPlayground() {
             dispatch({
               type: 'agentAssistantDeltaReceived',
               delta: event.delta,
+            });
+          },
+          onApprovalRequired: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
+            dispatch({
+              type: 'agentApprovalRequiredReceived',
+              request: event.request,
+            });
+          },
+          onApprovalResolved: (event) => {
+            if (!canUpdateCurrentRun()) {
+              return;
+            }
+
+            dispatch({
+              type: 'agentApprovalResolvedReceived',
+              toolCallId: event.toolCallId,
             });
           },
           onDebug: (event) => {

@@ -651,6 +651,103 @@ pre {
   color: #7a5a11;
 }
 
+.approvalBar {
+  display: grid;
+  gap: 10px;
+}
+
+.approvalCard {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e7d397;
+  border-radius: 8px;
+  background: #fffcf2;
+  padding: 14px;
+}
+
+.approvalCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.approvalCardHeader code {
+  overflow-wrap: anywhere;
+  color: #33464d;
+  font-size: 13px;
+}
+
+.approvalReason {
+  margin: 0;
+  color: #52646b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.approvalArguments {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid #e7d397;
+  border-radius: 8px;
+  background: #fffef9;
+  color: #1b2c32;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.approvalError {
+  margin: 0;
+  color: #9f2e2e;
+  font-size: 12px;
+}
+
+.approvalActions {
+  display: flex;
+  gap: 10px;
+}
+
+.approveButton,
+.denyButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  height: 38px;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-weight: 760;
+}
+
+.approveButton {
+  border: 0;
+  background: #1a7a52;
+  color: #ffffff;
+}
+
+.approveButton:hover:not(:disabled) {
+  background: #145f40;
+}
+
+.denyButton {
+  border: 1px solid #bcc8cc;
+  background: #ffffff;
+  color: #33464d;
+}
+
+.denyButton:hover:not(:disabled) {
+  border-color: #9f2e2e;
+  color: #9f2e2e;
+}
+
+.approveButton:disabled,
+.denyButton:disabled {
+  opacity: 0.6;
+}
+
 .auditReason {
   margin: 12px 0 0;
   color: #33464d;

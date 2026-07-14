@@ -875,6 +875,62 @@ model and policy, and loads the selected raw JSONL records through
 `GET /api/agent/sessions/[id]`. Debug remains an operational projection;
 Session remains the durable replay substrate.
 
+## Phase 26: Shell Tool And Command Safety
+
+Researching Codex CLI and Claude Code (see
+`docs/research-codex-claude-code.md`) showed both treat shell as a core tool
+behind an argument-aware safety classifier, not just another annotated tool.
+
+Added `shell` as a built-in tool with `bash -c` execution, a `workdir`
+argument resolved through the existing path policy, a per-call soft timeout
+layered under a hard runtime timeout, and per-stream output truncation
+(10240 chars / 256 lines).
+
+Added `lib/agent-shell-safety.ts`, a classifier that answers one question —
+does this command match a known read-only pattern? — and is deliberately
+conservative: any shell control construct (`;`, `&&`, `>`, `$`, backticks,
+...) falls back to review rather than being analyzed.
+
+The tool contract gained an optional `decidePermission` hook so a tool can
+refine (but never override a deny from) the generic permission decision. This
+let `shell` stay visible even in `read_only` runs: known-safe commands
+auto-allow, everything else is denied or asked for depending on sandbox mode.
+
+## Phase 27: Approval Pause And Resume
+
+The `AgentApprovalRequiredError` planted in Phase 7 was a deliberate
+fail-closed placeholder. This phase redeemed it for the streaming route.
+
+Added `lib/agent-approvals.ts`: an in-process registry (stashed on
+`globalThis` to survive Next.js's per-route module instancing) that turns a
+pending approval into a plain Promise, resolved by approve, deny, a 120s
+timeout, or the run's `AbortSignal`.
+
+`AgentRunContext` gained `approvalMode: 'interactive' | 'fail_closed'`
+(default `fail_closed`). Only `/api/agent/stream` sets `interactive`, because
+only a live SSE connection has a channel to surface the request to a user;
+the non-streaming `/api/agent` route keeps the original fail-closed behavior.
+
+Two new routes resolve pending approvals:
+
+```text
+GET  /api/agent/approvals?runId=...
+POST /api/agent/approvals/{runId}/{toolCallId}
+```
+
+`approval_requested` and `approval_resolved` were promoted from
+debug-wrapped events to first-class SSE event types (`approvalRequired` /
+`approvalResolved`), and the frontend gained an approval card with
+Approve/Deny buttons driven by those events. A denial returns a recoverable
+`APPROVAL_DENIED` tool output worded to steer the model away from retrying
+the same call, instead of failing the run.
+
+Pending state is intentionally not persisted to JSONL — matching both
+reference systems, an approval is turn-scoped memory state, and a dead
+process is treated as a denial. The full audit trail still lands in the
+session JSONL, since both approval events are ordinary recorded agent
+events.
+
 ## Deferred Work
 
 The following are useful, but should build on top of the loop/history core
@@ -882,8 +938,10 @@ rather than bypass it:
 
 - Anthropic Messages dialect
 - more OpenAI-compatible providers
-- sandbox enforcement
-- interactive approval resume
+- OS-level sandbox enforcement
+- durable (JSONL-persisted) pending approvals that survive a process restart
+- session replay / multi-turn resume
+- context compaction
 - user input during a run
 - retry policy
 - memory / retrieval

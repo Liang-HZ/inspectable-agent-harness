@@ -87,6 +87,7 @@ export async function POST(request: NextRequest) {
           {
             runId: runId,
             signal: request.signal,
+            approvalMode: 'interactive',
           },
           {
             onEvent: (event) => {

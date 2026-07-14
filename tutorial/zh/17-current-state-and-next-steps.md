@@ -87,9 +87,17 @@ output truncation、safe-command 分类器和 tool-level permission override。
 
 ### Approval Resume
 
-当前 runtime 能发 approval-needed events，但还不能在批准后 pause/resume。
+已经实现（见第 19 章）：`interactive` approval mode 下，`ask` 决策会挂起对应的
+tool-call promise，通过 `POST /api/agent/approvals/{runId}/{toolCallId}` 批准或
+拒绝后恢复执行；拒绝会产出一条 model-visible 的可恢复错误，循环继续而不是失败退出。
 
-这需要 JSONL 中有 durable pending state。
+Pending 状态目前是进程内存（`Map<runId:toolCallId, resolver>`），不是磁盘持久化——
+这与 Codex/Claude Code 的行为一致：批准是 turn 内的临时状态，进程重启即视为拒绝。
+完整的审计轨迹（谁在什么时候请求/批准/拒绝了什么）通过已有的 JSONL session event
+日志留存，approval_requested/approval_resolved 事件本来就会被记录。
+
+仍然缺的：进程重启后的 pending-approval 恢复（如果这变得重要，需要把 pending
+state 也写入 JSONL 并在 resume 时重建）。
 
 ### Session Replay
 

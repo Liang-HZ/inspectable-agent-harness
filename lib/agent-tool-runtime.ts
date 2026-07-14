@@ -1,6 +1,10 @@
 import type { AgentModelToolCall } from './agent-model-types';
 import type { AgentEvent } from './agent-events';
 import {
+  type AgentApprovalResolution,
+  waitForAgentApproval,
+} from './agent-approvals';
+import {
   AgentApprovalRequiredError,
   decideAgentToolPermission,
   resolveAgentPathAccessForRunPolicy,
@@ -152,12 +156,34 @@ function createToolPermissionDecidedEvent(
 function createApprovalRequestedEvent(
   request: AgentPermissionRequest,
   decision: AgentPermissionDecision,
+  context: AgentRunContext,
 ): AgentEvent {
   return {
     type: 'approval_requested',
+    runId: context.runId,
     request: request,
     decision: decision,
   };
+}
+
+function createApprovalResolvedEvent(
+  request: AgentPermissionRequest,
+  resolution: AgentApprovalResolution,
+  context: AgentRunContext,
+): AgentEvent {
+  return {
+    type: 'approval_resolved',
+    runId: context.runId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
+    resolution: resolution,
+  };
+}
+
+function formatApprovalDeniedMessage(
+  resolution: Extract<AgentApprovalResolution, { type: 'denied' }>,
+): string {
+  return `${resolution.reason} The action was not performed. Do not retry the same call; take a different approach or explain what you need in the final answer.`;
 }
 
 function createErroredToolExecution(
@@ -200,13 +226,25 @@ function decideAgentToolPermissionWithToolOverride(
   return overrideDecision ?? genericDecision;
 }
 
-function assertToolApprovalCanContinue(
+async function waitForInteractiveToolApproval(
   request: AgentPermissionRequest,
-  decision: AgentPermissionDecision,
-): void {
-  if (decision.type === 'ask') {
+  decision: Extract<AgentPermissionDecision, { type: 'ask' }>,
+  context: AgentRunContext,
+): Promise<AgentApprovalResolution> {
+  if (context.approvalMode !== 'interactive') {
+    // Non-interactive runs have no approval channel, so an ask decision
+    // stays fail-closed exactly like before approval resume existed.
     throw new AgentApprovalRequiredError(request, decision);
   }
+
+  return waitForAgentApproval({
+    runId: context.runId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
+    argumentsJson: request.argumentsJson,
+    reason: decision.reason,
+    signal: context.signal,
+  });
 }
 
 async function executeToolWithRuntimeLimits(
@@ -373,12 +411,6 @@ export async function executeAgentToolCall(
     createToolPermissionDecidedEvent(permissionRequest, permissionDecision),
   );
 
-  if (permissionDecision.type === 'ask') {
-    callbacks.onEvent?.(
-      createApprovalRequestedEvent(permissionRequest, permissionDecision),
-    );
-  }
-
   if (permissionDecision.type === 'deny') {
     const execution = createErroredToolExecution(
       toolCall,
@@ -393,7 +425,34 @@ export async function executeAgentToolCall(
     return execution;
   }
 
-  assertToolApprovalCanContinue(permissionRequest, permissionDecision);
+  if (permissionDecision.type === 'ask') {
+    callbacks.onEvent?.(
+      createApprovalRequestedEvent(permissionRequest, permissionDecision, context),
+    );
+    const resolution = await waitForInteractiveToolApproval(
+      permissionRequest,
+      permissionDecision,
+      context,
+    );
+    callbacks.onEvent?.(
+      createApprovalResolvedEvent(permissionRequest, resolution, context),
+    );
+
+    if (resolution.type === 'denied') {
+      const execution = createErroredToolExecution(
+        toolCall,
+        createRespondToModelToolOutput(
+          'APPROVAL_DENIED',
+          formatApprovalDeniedMessage(resolution),
+        ),
+        Date.now() - startedAt,
+      );
+      callbacks.onEvent?.(createToolFinishedEvent(execution));
+
+      return execution;
+    }
+  }
+
   assertAgentRunNotAborted(context);
   callbacks.onEvent?.(createToolStartedEvent(toolCall));
 

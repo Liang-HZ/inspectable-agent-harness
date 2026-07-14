@@ -108,12 +108,23 @@ export function projectAgentEventToStreamEvent(
 
     case 'approval_requested':
       return {
-        type: 'debug',
-        event: {
-          type: 'approvalRequested',
-          request: event.request,
-          decision: event.decision,
+        type: 'approvalRequired',
+        request: {
+          runId: event.runId,
+          toolCallId: event.request.toolCallId,
+          toolName: event.request.toolName,
+          argumentsJson: event.request.argumentsJson,
+          reason: event.decision.reason,
         },
+      };
+
+    case 'approval_resolved':
+      return {
+        type: 'approvalResolved',
+        runId: event.runId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        resolution: event.resolution,
       };
 
     case 'run_succeeded':

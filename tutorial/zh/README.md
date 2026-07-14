@@ -28,12 +28,13 @@ English mirror: [../en/README.md](../en/README.md)
 | [16](16-unlimited-loop-and-guardrails.md) | Unlimited loop 与 guardrails | 移除人为 round cap，同时阻止重复相同工具循环。 |
 | [17](17-current-state-and-next-steps.md) | 当前状态与下一步 | 总结哪些能力已经真实存在，以及下一步应该补什么。 |
 | [18](18-shell-tool-and-command-safety.md) | Shell 工具与命令安全分类 | 在 safe-command 分类器和 tool-level permission override 后面给模型一个 shell。 |
+| [19](19-approval-pause-and-resume.md) | Approval 暂停与恢复 | 把 `ask` 决策从直接失败变成挂起等待批准/拒绝后继续。 |
 
 ## 如何阅读
 
 如果是第一次看项目，先读 01 到 05。它们解释这个 repo 为什么重视显式边界和可检查性。
 
-如果要理解当前 agent runtime，读 08 到 16 加 18。它们覆盖 provider-neutral loop、真实工具、debug surface、session records、loop guardrails 和 shell 边界。
+如果要理解当前 agent runtime，读 08 到 16 加 18、19。它们覆盖 provider-neutral loop、真实工具、debug surface、session records、loop guardrails、shell 边界和 approval 暂停/恢复。
 
 如果要继续加能力，先读 17。下一个能力也应该遵守同样纪律：定义边界、暴露数据流、写真实测试、更新教程。
 
