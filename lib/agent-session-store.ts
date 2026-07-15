@@ -8,6 +8,7 @@ import {
 } from 'fs';
 import { join, relative } from 'path';
 
+import { applyAgentHistoryCompaction } from './agent-compaction';
 import type { AgentEvent } from './agent-events';
 import type { AgentModelWireApi } from './agent-model-types';
 import type { AgentRunPolicy } from './agent-permissions';
@@ -359,6 +360,32 @@ function readAgentResponseItemsFromRecords(
     .map((record) => record.payload);
 }
 
+/**
+ * Rebuilds the model-visible history by replaying persisted items in write
+ * order. A `compaction_summary` row marks a point where the live run replaced
+ * its history via `applyAgentHistoryCompaction`; because that transform is a
+ * pure function of (history so far, summary text), replaying it here
+ * reconstructs exactly the compacted history the live run continued with.
+ * Without this replay, resuming a compacted session would send the full
+ * uncompacted transcript back to the model.
+ */
+export function replayAgentResponseItemHistory(
+  items: AgentResponseItem[],
+): AgentResponseItem[] {
+  let history: AgentResponseItem[] = [];
+
+  for (const item of items) {
+    if (item.type === 'compaction_summary') {
+      history = applyAgentHistoryCompaction(history, item.content).history;
+      continue;
+    }
+
+    history.push(item);
+  }
+
+  return history;
+}
+
 export type AgentSessionResumeResult =
   | {
       ok: true;
@@ -399,7 +426,8 @@ export function resumeAgentSession(
     };
   }
 
-  const normalized = normalizeAgentResponseItemHistory(rawHistory);
+  const replayedHistory = replayAgentResponseItemHistory(rawHistory);
+  const normalized = normalizeAgentResponseItemHistory(replayedHistory);
 
   return {
     ok: true,

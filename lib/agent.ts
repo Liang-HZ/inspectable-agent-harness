@@ -798,66 +798,90 @@ export async function runAgentStream(
     policy: context.policy,
   });
 
-  assertAgentRunNotAborted(context);
-  const promptStep = createPromptStep(input, prompt, steps.length + 1);
-  steps.push(promptStep);
-  emitAgentEvent({
-    type: 'step_created',
-    step: promptStep,
-  });
-  logAgentStep(context.runId, promptStep);
-  logAgentInfo(context.runId, 'prompt_built', {
-    prompt: prompt,
-    promptLength: prompt.length,
-  });
+  try {
+    assertAgentRunNotAborted(context);
+    const promptStep = createPromptStep(input, prompt, steps.length + 1);
+    steps.push(promptStep);
+    emitAgentEvent({
+      type: 'step_created',
+      step: promptStep,
+    });
+    logAgentStep(context.runId, promptStep);
+    logAgentInfo(context.runId, 'prompt_built', {
+      prompt: prompt,
+      promptLength: prompt.length,
+    });
 
-  appendExistingResponseItemsToSession(sessionInit.newItemsToPersist, session);
-  const samplingResult = await runSamplingLoop(
-    modelGateway,
-    input,
-    context,
-    history,
-    steps,
-    modelCallUsages,
-    session,
-    emitAgentEvent,
-    callbacks.onDebugEvent,
-  );
-  const finalStep = createFinalAnswerStep(
-    samplingResult.model,
-    samplingResult.answer,
-    samplingResult.finalCallUsage,
-    steps.length + 1,
-    samplingResult.usedTool,
-  );
-  steps.push(finalStep);
-  emitAgentEvent({
-    type: 'step_created',
-    step: finalStep,
-  });
-  logAgentStep(context.runId, finalStep);
-  logAgentInfo(context.runId, 'model_answer_received', {
-    answer: samplingResult.answer,
-    answerLength: samplingResult.answer.length,
-    model: samplingResult.model,
-    hasUsage: samplingResult.finalCallUsage.tokenUsage !== null,
-  });
+    appendExistingResponseItemsToSession(sessionInit.newItemsToPersist, session);
+    const samplingResult = await runSamplingLoop(
+      modelGateway,
+      input,
+      context,
+      history,
+      steps,
+      modelCallUsages,
+      session,
+      emitAgentEvent,
+      callbacks.onDebugEvent,
+    );
+    const finalStep = createFinalAnswerStep(
+      samplingResult.model,
+      samplingResult.answer,
+      samplingResult.finalCallUsage,
+      steps.length + 1,
+      samplingResult.usedTool,
+    );
+    steps.push(finalStep);
+    emitAgentEvent({
+      type: 'step_created',
+      step: finalStep,
+    });
+    logAgentStep(context.runId, finalStep);
+    logAgentInfo(context.runId, 'model_answer_received', {
+      answer: samplingResult.answer,
+      answerLength: samplingResult.answer.length,
+      model: samplingResult.model,
+      hasUsage: samplingResult.finalCallUsage.tokenUsage !== null,
+    });
 
-  const usage = createAgentUsage(modelCallUsages);
-  const result = {
-    model: samplingResult.model,
-    answer: samplingResult.answer,
-    steps: steps,
-    usage: usage,
-  };
-  emitAgentEvent({
-    type: 'run_succeeded',
-    result: result,
-  });
-  logAgentInfo(context.runId, 'runtime_state_finished', {
-    status: runState.status,
-    eventCount: runState.events.length,
-  });
+    const usage = createAgentUsage(modelCallUsages);
+    const result = {
+      model: samplingResult.model,
+      answer: samplingResult.answer,
+      steps: steps,
+      usage: usage,
+    };
+    emitAgentEvent({
+      type: 'run_succeeded',
+      result: result,
+    });
+    logAgentInfo(context.runId, 'runtime_state_finished', {
+      status: runState.status,
+      eventCount: runState.events.length,
+    });
 
-  return result;
+    return result;
+  } catch (error) {
+    // A run must leave a terminal event behind: without it the session JSONL
+    // ends mid-run and the derived run state never reaches a terminal status.
+    // Emitting is best-effort -- if the JSONL append or the SSE enqueue is
+    // itself what failed, the original error still propagates.
+    try {
+      if (context.signal?.aborted) {
+        emitAgentEvent({
+          type: 'run_cancelled',
+          reason: 'Run aborted by the client.',
+        });
+      } else {
+        emitAgentEvent({
+          type: 'run_failed',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } catch {
+      // Keep the original error.
+    }
+
+    throw error;
+  }
 }

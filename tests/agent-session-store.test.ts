@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { afterEach, test } from 'node:test';
 
+import { applyAgentHistoryCompaction } from '../lib/agent-compaction';
 import type { AgentResponseItem } from '../lib/agent-response-items';
 import {
   appendAgentResponseItem,
@@ -161,6 +162,79 @@ test('resumeAgentSession reconstructs a clean prior turn', () => {
     assert.equal(result.session.id, session.id);
     assert.equal(result.session.path, session.path);
     assert.deepEqual(result.history, items);
+    assert.deepEqual(result.synthesizedItems, []);
+  }
+});
+
+test('resumeAgentSession replays compaction instead of returning the uncompacted transcript', () => {
+  const session = createTestSession();
+  appendAgentTurnContext(session, {
+    turnId: session.id,
+    model: 'fake-model',
+    wireApi: 'openai-chat-completions',
+    approvalPolicy: 'never',
+    sandboxMode: 'workspace_write',
+    temperature: undefined,
+  });
+
+  const preCompactionItems: AgentResponseItem[] = [
+    { type: 'message', role: 'system', content: 'system' },
+    { type: 'message', role: 'user', content: 'long task' },
+    {
+      type: 'message',
+      role: 'assistant',
+      content: 'working on it',
+      runtimeRole: 'working_message',
+    },
+    {
+      type: 'function_call',
+      callId: 'call-1',
+      name: 'read',
+      argumentsJson: JSON.stringify({ path: 'package.json' }),
+    },
+    {
+      type: 'function_call_output',
+      callId: 'call-1',
+      toolName: 'read',
+      output: 'file contents',
+      isError: false,
+    },
+  ];
+  for (const item of preCompactionItems) {
+    appendAgentResponseItem(session, item);
+  }
+
+  // The live run replaced its in-memory history with the compacted form and
+  // persisted only the summary item -- mirror exactly what
+  // compactAgentHistoryIfNeeded does.
+  const liveCompaction = applyAgentHistoryCompaction(
+    preCompactionItems,
+    'summary of the long task so far',
+  );
+  appendAgentResponseItem(session, liveCompaction.summaryItem);
+
+  const postCompactionItem: AgentResponseItem = {
+    type: 'message',
+    role: 'assistant',
+    content: 'continuing after compaction',
+    runtimeRole: 'final_response',
+  };
+  appendAgentResponseItem(session, postCompactionItem);
+
+  const result = resumeAgentSession(session.id);
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepEqual(result.history, [
+      ...liveCompaction.history,
+      postCompactionItem,
+    ]);
+    // The dropped assistant/tool items must not reappear.
+    assert.ok(
+      !result.history.some(
+        (item) => item.type === 'function_call' || item.type === 'function_call_output',
+      ),
+    );
     assert.deepEqual(result.synthesizedItems, []);
   }
 });

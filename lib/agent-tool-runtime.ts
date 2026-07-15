@@ -37,17 +37,6 @@ type AgentToolRuntimeCallbacks = {
   onEvent?: (event: AgentEvent) => void;
 };
 
-function createToolRequestEvent(toolCalls: AgentModelToolCall[]): AgentEvent {
-  return {
-    type: 'tool_requested',
-    toolRequests: toolCalls.map((toolCall) => ({
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      argumentsJson: toolCall.argumentsJson,
-    })),
-  };
-}
-
 function createToolStartedEvent(toolCall: AgentModelToolCall): AgentEvent {
   return {
     type: 'tool_started',
@@ -503,27 +492,4 @@ export async function executeAgentToolCall(
   callbacks.onEvent?.(createToolFinishedEvent(execution));
 
   return execution;
-}
-
-export async function executeAgentToolCalls(
-  toolCalls: AgentModelToolCall[],
-  context: AgentRunContext,
-  callbacks: AgentToolRuntimeCallbacks = {},
-): Promise<AgentToolExecution[]> {
-  assertAgentRunNotAborted(context);
-  callbacks.onEvent?.(createToolRequestEvent(toolCalls));
-
-  const toolExecutions: AgentToolExecution[] = [];
-
-  for (const toolCall of toolCalls) {
-    assertAgentRunNotAborted(context);
-    const toolExecution = await executeAgentToolCall(
-      toolCall,
-      context,
-      callbacks,
-    );
-    toolExecutions.push(toolExecution);
-  }
-
-  return toolExecutions;
 }

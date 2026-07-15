@@ -80,6 +80,12 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // `run_failed` already reaches the client as an `error` stream event
+      // through the projection; the catch below only sends a fallback for
+      // failures that happen before the runtime can emit events (for
+      // example, resuming an unknown sessionId).
+      let errorStreamEventSent = false;
+
       try {
         const result = await runAgentStream(
           parsedInput.input,
@@ -95,6 +101,10 @@ export async function POST(request: NextRequest) {
 
               if (streamEvent === undefined) {
                 return;
+              }
+
+              if (streamEvent.type === 'error') {
+                errorStreamEventSent = true;
               }
 
               controller.enqueue(encodeAgentStreamEvent(streamEvent));
@@ -127,12 +137,15 @@ export async function POST(request: NextRequest) {
         logAgentError(runId, 'stream_request_failed', {
           error: message,
         });
-        controller.enqueue(
-          encodeAgentStreamEvent({
-            type: 'error',
-            error: message,
-          }),
-        );
+
+        if (!errorStreamEventSent) {
+          controller.enqueue(
+            encodeAgentStreamEvent({
+              type: 'error',
+              error: message,
+            }),
+          );
+        }
       } finally {
         controller.close();
       }
