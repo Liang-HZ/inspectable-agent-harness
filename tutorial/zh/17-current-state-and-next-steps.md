@@ -102,24 +102,24 @@ state 也写入 JSONL 并在 resume 时重建）。
 ### Session Replay
 
 已经实现（见第 20 章）：`sessionId` 输入字段让同一个 JSONL session 可以被多次
-继续,`resumeAgentSession` 从 response-item 记录重建 model-visible history,
+继续，`resumeAgentSession` 从 response-item 记录重建 model-visible history,
 `normalizeAgentResponseItemHistory` 修复 mid-turn crash 留下的孤儿
 function_call。resume 只把新增内容(normalize 产生的 synthesized output、新的
-user 消息)写回磁盘,不会重写整段历史。
+user 消息)写回磁盘，不会重写整段历史。
 
-仍然缺的：非流式 `/api/agent` 路由没有 session 概念;没有从历史中间"分叉"出
-新会话的能力(Codex 的 `fork`);Session 面板还是一条扁平的 JSONL 流,不单独
+仍然缺的：非流式 `/api/agent` 路由没有 session 概念；没有从历史中间"分叉"出
+新会话的能力(Codex 的 `fork`);Session 面板还是一条扁平的 JSONL 流，不单独
 可视化"第几轮"。
 
 ### Context Compaction
 
-已经实现（见第 21 章）：token usage 达到阈值时,`decideAgentHistoryCompaction`
-触发压缩,`applyAgentHistoryCompaction` 用"完全替换"策略保留 system message、
-一条模型生成的摘要、以及预算内的最近 user 消息,其余全部吸收进摘要。因为压缩
-从不保留部分工具调用,function_call/function_call_output 配对不变量几乎是
+已经实现（见第 21 章）：token usage 达到阈值时，`decideAgentHistoryCompaction`
+触发压缩，`applyAgentHistoryCompaction` 用"完全替换"策略保留 system message、
+一条模型生成的摘要、以及预算内的最近 user 消息，其余全部吸收进摘要。因为压缩
+从不保留部分工具调用，function_call/function_call_output 配对不变量几乎是
 自动满足的。
 
-仍然缺的：阈值是固定常量,没有按模型 context window 配置;没有 Claude Code
+仍然缺的：阈值是固定常量，没有按模型 context window 配置；没有 Claude Code
 式不调模型的 microcompact;摘要生成失败没有重试/熔断。
 
 ### MCP / Dynamic / Hosted Tools

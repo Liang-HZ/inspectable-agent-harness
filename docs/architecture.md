@@ -200,6 +200,14 @@ boundary, then returns Server-Sent Events:
 - `done` events carry the final `AgentResult`
 - `error` events carry stream-time failures
 
+Every run now leaves a terminal event behind: `run_succeeded`, `run_failed`,
+or `run_cancelled`. `runAgentStream` emits `run_failed` (projected as the
+`error` stream event) or `run_cancelled` (client abort) from its catch path
+and persists them to the session JSONL, so the derived run state always
+reaches a terminal status. The route only sends a fallback `error` event for
+failures that happen before the runtime can emit events, such as resuming an
+unknown `sessionId`.
+
 ### Input Validation
 
 `lib/chat-input.ts` owns Zod validation for `/api/chat`.
@@ -613,9 +621,29 @@ normal success output because a failing command is information the model needs.
 `lib/agent-shell-safety.ts` owns the safe-command classifier. It answers one
 question: does this command match a known read-only pattern? Shell control
 constructs (`;`, `&&`, `>`, `$`, backticks, ...) are never analyzed and fall
-back to review. Pipelines are safe only when every segment is safe. `find` and
-`git` receive argument-level checks. The classifier prefers false negatives
-over false positives.
+back to review. Pipelines are safe only when every segment is safe. The
+classifier prefers false negatives over false positives.
+
+A command name alone is not enough for a safe verdict; arguments are screened
+too, because safe commands skip approval entirely:
+
+- Path escapes: any argument (or `--flag=value` value) that is an absolute
+  path, starts with `~`, or contains a `..` path segment falls back to review.
+  `cat /etc/passwd` is not a read-only pattern even though `cat` is.
+- Write/exec-capable flags per command: `sort`/`tree` reject `-o`/`--output`
+  prefixes, `rg` rejects `--pre`/`--hostname-bin`, `uniq` allows at most one
+  positional argument (a second one is an output file).
+- `git` rejects global flags before the subcommand (`-C`, `-c`, `--git-dir`,
+  `--exec-path` can retarget the repository or executed programs) and
+  `--output` after it; `find` keeps its action-flag denylist.
+
+This is still a lexical screen, not a sandbox: it cannot see through symlinks
+or know what a command actually touches at runtime. The shell tool also spawns
+its child process with an allowlisted environment (`PATH`, `HOME`, locale
+variables, ...) instead of the full `process.env`, so an approved `env` or
+`printenv` cannot leak `OPENAI_API_KEY` into model-visible output, and the
+`workdir` argument goes through the same realpath-then-recheck sequence as the
+file builtins to block symlinked workdir escapes.
 
 The shell tool plugs into permissions through the optional `decidePermission`
 hook on the tool contract. The runtime composition rule lives in
@@ -1161,9 +1189,17 @@ normalizeAgentResponseItemHistory(items)
   inserts a synthesized function_call_output (isError: true, reusing the
   original callId) after any orphan function_call
 
+replayAgentResponseItemHistory(items)
+  rebuilds the model-visible history by replaying items in write order; a
+  compaction_summary row marks a point where the live run replaced its
+  history, and because applyAgentHistoryCompaction is a pure function of
+  (history so far, summary text), replaying it reconstructs exactly the
+  compacted history the live run continued with
+
 resumeAgentSession(sessionId)
   finds the session file, reads every response_item record in write order,
-  runs normalizeAgentResponseItemHistory, and returns the reconstructed
+  replays compactions with replayAgentResponseItemHistory, runs
+  normalizeAgentResponseItemHistory, and returns the reconstructed
   history plus the session handle -- without writing a new session_meta record
 ```
 
@@ -1218,6 +1254,9 @@ Console.
 There is no dedicated `compacted` JSONL row type distinct from ordinary
 `response_item`/`agent_event` records -- compaction is fully observable
 through the existing record kinds, so a bespoke third type wasn't needed.
+The `compaction_summary` row doubles as the replay marker: resume applies the
+same pure transform at that point instead of returning the uncompacted
+transcript, so compaction survives session resume.
 
 Current limitations:
 
