@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdir, rm, symlink } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 
 import type { AgentModelToolCall } from '../lib/agent-model-types';
@@ -55,15 +58,54 @@ test('classifier accepts known read-only commands and pipelines', () => {
     'grep -rn "agent" lib',
     'git status',
     'git log --oneline -5',
+    'git log master..main',
     'git branch -a',
     'find lib -name "*.ts"',
     'grep -c export lib/agent.ts | cat',
     "grep 'a b' lib/agent.ts",
+    'sort package.json',
+    'uniq notes.txt',
+    'rg -n foo lib',
+    'du -h lib',
+    'git log --oneline | sort | uniq -c',
   ];
 
   for (const command of safeCommands) {
     const decision = classifyShellCommandSafety(command);
     assert.equal(decision.type, 'safe', `expected safe: ${command}`);
+  }
+});
+
+test('classifier flags safe-listed commands whose arguments escape the project or can write/execute', () => {
+  const reviewCommands = [
+    'cat /etc/passwd',
+    'head -5 ~/.zshrc',
+    'cat ../outside.txt',
+    'ls lib/../../sibling',
+    'sort -o pwned.txt package.json',
+    'sort -opwned.txt package.json',
+    'sort --output=pwned.txt package.json',
+    'uniq notes.txt pwned.txt',
+    'tree -o pwned.txt',
+    'rg --pre /bin/bash pattern lib',
+    'rg --pre=/bin/bash pattern lib',
+    'grep --include=/etc/passwd root lib',
+    'git diff --output=/tmp/pwned',
+    'git log --output=pwned.txt',
+    'git -C / log',
+    'git --git-dir=/tmp/other/.git log',
+    'find / -name secrets',
+    'find .. -name "*.env"',
+    'git diff /etc/hosts',
+  ];
+
+  for (const command of reviewCommands) {
+    const decision = classifyShellCommandSafety(command);
+    assert.equal(
+      decision.type,
+      'needs_review',
+      `expected needs_review: ${command}`,
+    );
   }
 });
 
@@ -190,6 +232,49 @@ test('shell rejects unsafe commands in read-only runs at the permission boundary
   assert.match(execution.modelOutput, /PERMISSION_DENIED/);
 });
 
+test('shell rejects safe-listed commands with project-escaping arguments in read-only runs', async () => {
+  const readOutsideExecution = await executeShellTool(
+    { command: 'cat /etc/passwd' },
+    { approvalPolicy: 'never', sandboxMode: 'read_only' },
+  );
+
+  assert.equal(readOutsideExecution.isError, true);
+  assert.match(readOutsideExecution.modelOutput, /PERMISSION_DENIED/);
+
+  const writeOutsideExecution = await executeShellTool(
+    { command: 'sort -o /tmp/pwned.txt package.json' },
+    { approvalPolicy: 'never', sandboxMode: 'read_only' },
+  );
+
+  assert.equal(writeOutsideExecution.isError, true);
+  assert.match(writeOutsideExecution.modelOutput, /PERMISSION_DENIED/);
+});
+
+test('shell child process does not inherit harness secrets', async () => {
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'sk-test-secret-should-not-leak';
+
+  try {
+    const execution = await executeShellTool(
+      { command: 'env' },
+      { approvalPolicy: 'never', sandboxMode: 'workspace_write' },
+    );
+
+    assert.equal(execution.isError, false);
+    const result = readResultObject(execution.output.details);
+    const stdout = String(result.stdout);
+    assert.ok(!stdout.includes('OPENAI_API_KEY'), 'API key leaked into env');
+    assert.ok(!stdout.includes('sk-test-secret-should-not-leak'));
+    assert.match(stdout, /(^|\n)PATH=/);
+  } finally {
+    if (originalApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  }
+});
+
 test('shell requires approval for unsafe commands under on-request policy', async () => {
   await assert.rejects(
     executeShellTool(
@@ -216,6 +301,27 @@ test('shell resolves workdir inside the project and rejects escapes', async () =
 
   assert.equal(outsideExecution.isError, true);
   assert.match(outsideExecution.modelOutput, /PATH_OUTSIDE_ALLOWED_ROOT/);
+});
+
+test('shell rejects a workdir symlink whose real directory is outside the project', async () => {
+  const linkParent = path.join(process.cwd(), 'data');
+  const linkPath = path.join(linkParent, 'shell-escape-link');
+
+  await mkdir(linkParent, { recursive: true });
+  await rm(linkPath, { force: true });
+  await symlink(os.tmpdir(), linkPath, 'dir');
+
+  try {
+    const execution = await executeShellTool({
+      command: 'pwd',
+      workdir: 'data/shell-escape-link',
+    });
+
+    assert.equal(execution.isError, true);
+    assert.match(execution.modelOutput, /PATH_OUTSIDE_ALLOWED_ROOT/);
+  } finally {
+    await rm(linkPath, { force: true });
+  }
 });
 
 test('shell rejects invalid arguments as a validation error', async () => {

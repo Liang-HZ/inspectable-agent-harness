@@ -49,6 +49,24 @@ const SAFE_SIMPLE_COMMANDS = new Set([
   'rg',
 ]);
 
+// A command name alone does not make a command read-only: `sort -o` writes a
+// file, `rg --pre` executes a program, and `cat /etc/passwd` reads outside the
+// project. Safe classification therefore also screens arguments. Flags that
+// can write or execute are denied per command by prefix, which also covers
+// attached forms such as `-ofile` and GNU long-option abbreviations such as
+// `--out=`.
+const SAFE_COMMAND_DENIED_FLAG_PREFIXES: Record<string, string[]> = {
+  sort: ['-o', '--o'],
+  tree: ['-o', '--o'],
+  rg: ['--pre', '--hostname-bin'],
+};
+
+// `uniq [flags] [input [output]]`: a second positional argument is an output
+// file, so more than one positional argument falls back to review.
+const SAFE_COMMAND_MAX_POSITIONAL_ARGUMENTS: Record<string, number> = {
+  uniq: 1,
+};
+
 const SAFE_GIT_SUBCOMMANDS = new Set([
   'status',
   'log',
@@ -157,6 +175,12 @@ function classifySimpleCommandSegment(
   }
 
   if (SAFE_SIMPLE_COMMANDS.has(commandName)) {
+    const argumentDecision = classifySafeCommandArguments(commandName, tokens);
+
+    if (argumentDecision !== undefined) {
+      return argumentDecision;
+    }
+
     return {
       type: 'safe',
       reason: `\`${commandName}\` is a known read-only command.`,
@@ -169,6 +193,99 @@ function classifySimpleCommandSegment(
   };
 }
 
+function classifySafeCommandArguments(
+  commandName: string,
+  tokens: string[],
+): ShellCommandSafetyDecision | undefined {
+  const pathEscapeDecision = classifyPathEscapeArguments(commandName, tokens);
+
+  if (pathEscapeDecision !== undefined) {
+    return pathEscapeDecision;
+  }
+
+  const deniedFlagPrefixes = SAFE_COMMAND_DENIED_FLAG_PREFIXES[commandName];
+
+  if (deniedFlagPrefixes !== undefined) {
+    const deniedFlag = tokens
+      .slice(1)
+      .find(
+        (token) =>
+          token.startsWith('-') &&
+          deniedFlagPrefixes.some((prefix) => token.startsWith(prefix)),
+      );
+
+    if (deniedFlag !== undefined) {
+      return {
+        type: 'needs_review',
+        reason: `\`${commandName} ${deniedFlag}\` can write files or execute programs, so it is not a read-only pattern.`,
+      };
+    }
+  }
+
+  const maxPositionalArguments =
+    SAFE_COMMAND_MAX_POSITIONAL_ARGUMENTS[commandName];
+
+  if (maxPositionalArguments !== undefined) {
+    const positionalArguments = tokens
+      .slice(1)
+      .filter((token) => !token.startsWith('-'));
+
+    if (positionalArguments.length > maxPositionalArguments) {
+      return {
+        type: 'needs_review',
+        reason: `\`${commandName}\` with multiple positional arguments can write to the last one, so it is not a read-only pattern.`,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+// Safe commands run without approval, so their file arguments must stay
+// inside the project. Absolute paths, `~` expansion, and `..` segments all
+// fall back to review. This is a lexical screen: it cannot follow symlinks,
+// which is one reason a classifier is not a sandbox.
+function classifyPathEscapeArguments(
+  commandName: string,
+  tokens: string[],
+): ShellCommandSafetyDecision | undefined {
+  for (const token of tokens.slice(1)) {
+    const candidate = readPathCandidate(token);
+
+    if (candidate !== undefined && isPathEscape(candidate)) {
+      return {
+        type: 'needs_review',
+        reason: `\`${commandName} ${token}\` points outside the project, so it is not classified as read-only.`,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function readPathCandidate(token: string): string | undefined {
+  if (!token.startsWith('-')) {
+    return token;
+  }
+
+  const equalsIndex = token.indexOf('=');
+
+  return equalsIndex === -1 ? undefined : token.slice(equalsIndex + 1);
+}
+
+function isPathEscape(candidate: string): boolean {
+  if (candidate.startsWith('/') || candidate.startsWith('~')) {
+    return true;
+  }
+
+  return (
+    candidate === '..' ||
+    candidate.startsWith('../') ||
+    candidate.endsWith('/..') ||
+    candidate.includes('/../')
+  );
+}
+
 function classifyFindCommand(tokens: string[]): ShellCommandSafetyDecision {
   const unsafeFlag = tokens.find((token) => UNSAFE_FIND_FLAGS.has(token));
 
@@ -177,6 +294,12 @@ function classifyFindCommand(tokens: string[]): ShellCommandSafetyDecision {
       type: 'needs_review',
       reason: `\`find ${unsafeFlag}\` can execute or delete, so it is not a read-only pattern.`,
     };
+  }
+
+  const pathEscapeDecision = classifyPathEscapeArguments('find', tokens);
+
+  if (pathEscapeDecision !== undefined) {
+    return pathEscapeDecision;
   }
 
   return {
@@ -197,11 +320,42 @@ function classifyGitCommand(tokens: string[]): ShellCommandSafetyDecision {
     };
   }
 
+  // Global git flags before the subcommand (`-C`, `-c`, `--git-dir`,
+  // `--exec-path`, ...) can retarget the repository or change which programs
+  // git runs, so a safe git command must start directly with its subcommand.
+  const subcommandIndex = tokens.indexOf(subcommand);
+  const globalFlag = tokens
+    .slice(1, subcommandIndex)
+    .find((token) => token.startsWith('-'));
+
+  if (globalFlag !== undefined) {
+    return {
+      type: 'needs_review',
+      reason: `\`git ${globalFlag}\` before the subcommand can retarget the repository or executed programs, so it is not classified.`,
+    };
+  }
+
   if (!SAFE_GIT_SUBCOMMANDS.has(subcommand)) {
     return {
       type: 'needs_review',
       reason: `\`git ${subcommand}\` is not in the known read-only git subcommand list.`,
     };
+  }
+
+  // `git log/diff/show --output=<file>` writes the result to a file.
+  const outputFlag = tokens.find((token) => token.startsWith('--output'));
+
+  if (outputFlag !== undefined) {
+    return {
+      type: 'needs_review',
+      reason: `\`git ${subcommand} ${outputFlag}\` writes to a file, so it is not a read-only pattern.`,
+    };
+  }
+
+  const pathEscapeDecision = classifyPathEscapeArguments('git', tokens);
+
+  if (pathEscapeDecision !== undefined) {
+    return pathEscapeDecision;
   }
 
   if (subcommand === 'branch') {

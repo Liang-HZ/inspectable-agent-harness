@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 
 import * as z from 'zod';
 
@@ -17,7 +17,9 @@ import type {
   AgentToolRuntimeContext,
 } from './agent-tool-contracts';
 import {
+  assertAgentPathAllowedByPolicy,
   currentProjectPathAccessPolicy,
+  displayAgentToolPath,
   resolveAgentToolPath,
   type ResolvedAgentToolPath,
 } from './agent-path-policy';
@@ -180,9 +182,12 @@ async function resolveShellWorkdir(
 ): Promise<ResolvedAgentToolPath> {
   const resolvedPath = resolveAgentToolPath(workdir, pathAccess);
 
-  let workdirStat;
+  // Same realpath-then-recheck sequence as the file builtins: a lexically
+  // in-project workdir can still be a symlink whose real directory is outside
+  // the allowed root.
+  let realAbsolutePath: string;
   try {
-    workdirStat = await stat(
+    realAbsolutePath = await realpath(
       /* turbopackIgnore: true */ resolvedPath.absolutePath,
     );
   } catch {
@@ -192,6 +197,12 @@ async function resolveShellWorkdir(
     );
   }
 
+  assertAgentPathAllowedByPolicy(realAbsolutePath, pathAccess);
+
+  const workdirStat = await stat(
+    /* turbopackIgnore: true */ realAbsolutePath,
+  );
+
   if (!workdirStat.isDirectory()) {
     throw new AgentToolRespondToModelError(
       'NOT_A_DIRECTORY',
@@ -199,7 +210,10 @@ async function resolveShellWorkdir(
     );
   }
 
-  return resolvedPath;
+  return {
+    absolutePath: realAbsolutePath,
+    displayPath: displayAgentToolPath(realAbsolutePath, pathAccess),
+  };
 }
 
 function appendCollectedOutput(
@@ -226,6 +240,36 @@ function appendCollectedOutput(
   }
 }
 
+// The child process must not inherit the harness's secrets: with a full
+// `process.env`, one approved `printenv` puts OPENAI_API_KEY into
+// model-visible output and the session JSONL. Allowlist the harmless
+// variables instead of denylisting known secret names.
+const SHELL_ENV_ALLOWED_NAMES = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TERM',
+  'TMPDIR',
+  'TZ',
+  'LANG',
+]);
+
+function createSanitizedShellEnv(): NodeJS.ProcessEnv {
+  const sanitizedEnv: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV,
+  };
+
+  for (const [name, value] of Object.entries(process.env)) {
+    if (SHELL_ENV_ALLOWED_NAMES.has(name) || name.startsWith('LC_')) {
+      sanitizedEnv[name] = value;
+    }
+  }
+
+  return sanitizedEnv;
+}
+
 type SpawnedShellCommandResult = {
   exitCode: number | null;
   terminationSignal: string | null;
@@ -243,7 +287,7 @@ function runShellCommandProcess(
   return new Promise((resolve, reject) => {
     const child = spawn('bash', ['-c', command], {
       cwd: workdirAbsolutePath,
-      env: process.env,
+      env: createSanitizedShellEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -440,7 +484,7 @@ const shellToolDefinition = {
   modelTool: {
     name: 'shell',
     description:
-      'Run a shell command with bash -c inside the project. Known read-only commands (ls, cat, grep, git status/log/diff, ...) run without approval; anything else follows the run approval policy. Output is truncated, so prefer specific commands over broad dumps.',
+      'Run a shell command with bash -c inside the project. Known read-only commands with project-relative arguments (ls, cat, grep, git status/log/diff, ...) run without approval; absolute paths, `~`, `..`, and any other command follow the run approval policy. Output is truncated, so prefer specific commands over broad dumps.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
