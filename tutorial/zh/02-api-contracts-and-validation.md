@@ -153,3 +153,30 @@ Validation 更重要的作用是固定边界语义。Agent endpoint 会接受更
 ## 本章小结
 
 这一章把 API contract 固定下来：route 只处理 HTTP，parser 处理不可信输入，env 层处理配置，service 只看 typed input，前端按 discriminant 解析结果。这套规则后来直接复用到 agent API。
+
+## 本章验证点
+
+验证 validation contract 真实生效：空 body 得到的是结构化 400，请求根本不会走到模型。
+
+1. 启动 dev server（`npm run dev`）后，向 `/api/chat` 发空 body（无需 key）：
+
+```bash
+curl -s -i -X POST http://localhost:3000/api/chat \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+实测响应为 `HTTP/1.1 400 Bad Request`，body 是：
+
+```json
+{"ok":false,"error":"Request body validation failed.","validationErrors":{"formErrors":[],"fieldErrors":{"message":["Field `message` is required."]}}}
+```
+
+`fieldErrors.message` 就是本章说的结构化字段错误，前端可以直接定位到字段。
+
+2. agent input parser 的契约测试（无需 key）：
+
+```bash
+npx tsx --test tests/agent-input.test.ts
+```
+
+实测 3 个用例全过（`pass 3`），覆盖 run policy 字段解析、safe read-only 默认值和非法 policy 字段的 field errors。

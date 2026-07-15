@@ -106,3 +106,26 @@ Agent runtime 的关键风险常在错误路径：工具失败、取消、重复
 ## 本章小结
 
 这一章建立了 agent runtime 的测试地基：用 fake gateway 固定模型行为，用真实工具测试验证集成，用断言证明 loop 语义而不是模型质量。
+
+## 本章验证点
+
+验证"不依赖真实模型"是字面成立的：在一台没有 `.env.local`、没有任何 `OPENAI_*` 环境变量的机器上直接全量跑：
+
+```bash
+npm test
+```
+
+实测尾部输出：
+
+```text
+ℹ tests 103
+ℹ suites 0
+ℹ pass 103
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1651.784667
+```
+
+103 个用例、约 1.6 秒、零网络请求、零 key。这可能成立是因为：fake gateway 把模型事件固定成脚本化的 `AgentModelStreamEvent[]`，真实工具在本地文件系统上执行，因此 loop 语义、history 形状和错误路径都能在无 key 环境下断言。真实 provider 只在冒烟测试时才需要在场。

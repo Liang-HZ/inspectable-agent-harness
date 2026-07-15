@@ -173,3 +173,33 @@ return { ok: true, result };
 - response shape 显式可读
 
 后续所有 agent 能力都沿着这条线继续生长，而不是推翻重来。
+
+## 本章验证点
+
+验证地基三件事：类型边界干净、全量测试绿、起点提交与正文一致。以下命令都不需要 API key。
+
+1. 类型检查，脚本横幅之后无任何输出即通过：
+
+```bash
+npm run typecheck
+```
+
+2. 全量测试，实测尾部输出（截取）：
+
+```bash
+npm test
+```
+
+```text
+ℹ tests 103
+ℹ pass 103
+ℹ fail 0
+```
+
+3. 确认仓库第一个提交：
+
+```bash
+git log --reverse --oneline | head -1
+```
+
+实测输出：`75be406 Add Next.js model and agent backend`，与本章 Git 证据一致。

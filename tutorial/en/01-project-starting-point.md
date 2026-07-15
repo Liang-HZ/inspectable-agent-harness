@@ -197,3 +197,35 @@ This chapter establishes the foundation:
 - response shapes are explicit
 
 Every later agent capability grows along this line instead of replacing it.
+
+## Chapter Checkpoint
+
+Verify the three foundations: clean type boundaries, a green test suite, and a
+first commit that matches this chapter. None of these commands needs an API key.
+
+1. Type check; no output after the script banner means it passed:
+
+```bash
+npm run typecheck
+```
+
+2. Full test suite; measured tail output (truncated):
+
+```bash
+npm test
+```
+
+```text
+ℹ tests 103
+ℹ pass 103
+ℹ fail 0
+```
+
+3. Confirm the repository's first commit:
+
+```bash
+git log --reverse --oneline | head -1
+```
+
+Measured output: `75be406 Add Next.js model and agent backend`, matching the
+Git evidence above.

@@ -141,3 +141,37 @@ The extensibility point is the dialect boundary, not only `baseURL`.
 This chapter isolates provider differences in dialects: the runtime uses a
 stable IR, while dialects compile requests, parse streams, convert tool schemas,
 and normalize usage.
+
+## Chapter Checkpoint
+
+Verify the two hard rules of the dialect layer: tool schemas are compiled by
+the dialect, and the agent loop imports no provider wire types.
+
+1. OpenAI strict tool schema compilation tests (no key required):
+
+```bash
+npx tsx --test tests/openai-tool-schema.test.ts
+```
+
+Measured output:
+
+```text
+✔ OpenAI strict tool schema marks every property as required
+✔ OpenAI strict tool schema represents optional properties with null type
+ℹ pass 2
+```
+
+These two cases prove exactly this chapter's Tool Schema Boundary: the internal
+`inputSchema` stays provider-neutral, and strict-mode rules ("every property
+required, optional fields expressed with a null type") are compiled by the
+OpenAI dialect rather than written into the tool contract.
+
+2. Check that the boundary has not leaked (measured: no output; the command
+   exits with code 1, which means pass):
+
+```bash
+grep -n "ChatCompletionMessage\|ResponseStreamEvent" lib/agent.ts
+```
+
+If this grep ever prints anything, the dialect boundary has leaked into the
+agent loop — the exact rule stated in this chapter.

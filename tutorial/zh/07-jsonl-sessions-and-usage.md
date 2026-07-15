@@ -126,3 +126,29 @@ JSONL 未来还会支撑 session list、session replay、resume 和 telemetry ex
 ## 本章小结
 
 这一章建立了持久化运行记录：事件按 JSONL 追加写入，usage 同时保留 raw 和 normalized 形态，前端可以读取 session，但 Debug 与 Session 的语义保持分离。
+
+## 本章验证点
+
+验证 session 读取 API 与 JSONL 落盘结构。
+
+1. 无 session 时的真实空响应（启动 dev server 即可，无需 key）：
+
+```bash
+curl -s http://localhost:3000/api/agent/sessions
+```
+
+实测输出：
+
+```json
+{"ok":true,"sessions":[]}
+```
+
+注意它仍然是 `ok/sessions` 的 discriminated shape，而不是裸数组——空列表也走同一契约。
+
+2. 需要先按第 0 章配好 `.env.local`：跑一次 agent run 之后检查落盘：
+
+```bash
+find data/agent-sessions -name '*.jsonl'
+```
+
+预期出现 `data/agent-sessions/YYYY/MM/DD/rollout-{timestamp}-{runId}.jsonl`。用 `head -3` 查看该文件：每行是 tagged JSON，前两行 `type` 依次为 `session_meta`、`turn_context`，随后是 `agent_event` 与 `response_item` 行。此时再请求 `GET /api/agent/sessions`，`sessions` 数组不再为空。

@@ -167,3 +167,38 @@ fake capability surface.
 This chapter creates the first observable agent loop: input enters `/api/agent`,
 the runtime emits steps, logs include `runId`, and the frontend can see what the
 agent did.
+
+## Chapter Checkpoint
+
+Verify the observability chain: structured logging already works even before a
+key is configured.
+
+1. Start the dev server and hit `/api/agent` directly (no key needed for this
+   item):
+
+```bash
+curl -s -X POST http://localhost:3000/api/agent \
+  -H 'Content-Type: application/json' -d '{"task":"say hi"}'
+```
+
+With no key configured, the response is HTTP 500
+`{"ok":false,"error":"Missing OPENAI_API_KEY in environment variables."}`, and
+the dev server terminal shows structured logs sharing one `runId` (measured,
+truncated):
+
+```text
+{"level":"info","scope":"agent","runId":"b6cd0b66-…","event":"request_received"}
+{"level":"info","scope":"agent","runId":"b6cd0b66-…","event":"input_validated","task":"say hi","taskLength":6,…}
+{"level":"error","scope":"agent","runId":"b6cd0b66-…","event":"model_config_failed","error":"Missing OPENAI_API_KEY in environment variables."}
+```
+
+The config boundary fails cleanly before any model call, and every step chains
+on `runId` — exactly the loop this chapter builds.
+
+2. The full success path needs `.env.local` configured per chapter 0. The same
+   curl then returns this shape (fixed by `agentResultSchema` in
+   `lib/agent-api-types.ts`):
+
+```json
+{"ok":true,"result":{"model":"…","answer":"…","steps":[{"order":1,"title":"…","detail":"…"}],"usage":{"totalTokenUsage":{…},"lastTokenUsage":{…},"calls":[…]}}}
+```

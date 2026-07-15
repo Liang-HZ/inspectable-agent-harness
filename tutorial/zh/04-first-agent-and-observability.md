@@ -149,3 +149,30 @@ Toy tool 只能验证链路，不能代表生产级能力。真实工具出现�
 ## 本章小结
 
 这一章建立了第一个 agent 可观察闭环：输入进入 `/api/agent`，runtime 产生步骤，日志带 `runId`，前端能看到 agent 的行动轨迹。
+
+## 本章验证点
+
+验证可观察性链路：即使没有配置 key，结构化日志也已经真实工作。
+
+1. 启动 dev server 后直接打 `/api/agent`（本项验证无需 key）：
+
+```bash
+curl -s -X POST http://localhost:3000/api/agent \
+  -H 'Content-Type: application/json' -d '{"task":"say hi"}'
+```
+
+在未配置 key 时，响应是 HTTP 500 `{"ok":false,"error":"Missing OPENAI_API_KEY in environment variables."}`；同时 dev server 终端出现共享同一 `runId` 的结构化日志（实测，已截断）：
+
+```text
+{"level":"info","scope":"agent","runId":"b6cd0b66-…","event":"request_received"}
+{"level":"info","scope":"agent","runId":"b6cd0b66-…","event":"input_validated","task":"say hi","taskLength":6,…}
+{"level":"error","scope":"agent","runId":"b6cd0b66-…","event":"model_config_failed","error":"Missing OPENAI_API_KEY in environment variables."}
+```
+
+配置边界在模型调用前清晰失败，且每一步都可以用 `runId` 串起来——这正是本章要建立的闭环。
+
+2. 完整成功路径需要先按第 0 章配好 `.env.local`。同样的 curl 预期返回形态（由 `lib/agent-api-types.ts` 的 `agentResultSchema` 固定）：
+
+```json
+{"ok":true,"result":{"model":"…","answer":"…","steps":[{"order":1,"title":"…","detail":"…"}],"usage":{"totalTokenUsage":{…},"lastTokenUsage":{…},"calls":[…]}}}
+```

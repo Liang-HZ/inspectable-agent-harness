@@ -150,3 +150,35 @@ guessed from logs. The workbench turns runtime state into feedback.
 
 The living architecture explains the system shape. The workbench observes
 system behavior. Together, they keep a fast-moving agent project understandable.
+
+## Chapter Checkpoint
+
+Verify that `docs/architecture.md` is still alive: every path in the Layer Map
+must exist on disk, and the map must actually navigate you to code.
+
+1. Check that every Layer Map path exists; no output means every entry resolves
+   (measured: no output):
+
+```bash
+awk '/^## Layer Map/,/^## Boundary Rules/' docs/architecture.md \
+  | grep -oE '^(app|lib|components)/[^ ]+' \
+  | while read -r f; do [ -e "$f" ] || echo "stale entry: $f"; done
+```
+
+2. Navigate with the Layer Map: locate a responsibility in the doc, then open
+   the file it names:
+
+```bash
+grep -n "stream-projection" docs/architecture.md | head -4
+```
+
+First two measured lines:
+
+```text
+46:  AgentStreamRoute --> AgentProjection[lib/agent-stream-projection.ts]
+96:lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
+```
+
+Line 96 comes from the Layer Map. Open that path and compare it with the
+projection responsibility described in this chapter. Any miss means the doc
+owes a sync update.

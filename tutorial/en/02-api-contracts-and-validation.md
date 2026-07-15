@@ -170,3 +170,34 @@ silent bad state.
 This chapter locks down the API contract: routes own HTTP, parsers own
 untrusted input, env code owns configuration, services receive typed inputs, and
 the frontend parses discriminated results. The agent API reuses the same rules.
+
+## Chapter Checkpoint
+
+Verify that the validation contract actually holds: an empty body gets a
+structured 400 and never reaches the model.
+
+1. Start the dev server (`npm run dev`), then POST an empty body to `/api/chat`
+   (no key required):
+
+```bash
+curl -s -i -X POST http://localhost:3000/api/chat \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+Measured response is `HTTP/1.1 400 Bad Request` with this body:
+
+```json
+{"ok":false,"error":"Request body validation failed.","validationErrors":{"formErrors":[],"fieldErrors":{"message":["Field `message` is required."]}}}
+```
+
+`fieldErrors.message` is the structured field error this chapter describes; the
+frontend can point at the exact field.
+
+2. Contract tests for the agent input parser (no key required):
+
+```bash
+npx tsx --test tests/agent-input.test.ts
+```
+
+Measured: all 3 cases pass (`pass 3`), covering run policy field parsing, the
+safe read-only default, and field errors for invalid policy fields.

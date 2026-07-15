@@ -138,3 +138,30 @@ Workbench 首先是检查界面。它暴露 request、response、stream、debug�
 ## 本章小结
 
 Living architecture 负责解释系统结构，workbench 负责观察系统行为。两者让项目在快速演化时仍然可理解。
+
+## 本章验证点
+
+验证 `docs/architecture.md` 仍然是活的：Layer Map 里的路径必须真实存在，并且能用它导航到代码。
+
+1. 校验 Layer Map 中的每个路径都存在于磁盘，无输出即全部命中（实测无输出）：
+
+```bash
+awk '/^## Layer Map/,/^## Boundary Rules/' docs/architecture.md \
+  | grep -oE '^(app|lib|components)/[^ ]+' \
+  | while read -r f; do [ -e "$f" ] || echo "stale entry: $f"; done
+```
+
+2. 用 Layer Map 导航：先在文档里定位职责，再打开对应文件：
+
+```bash
+grep -n "stream-projection" docs/architecture.md | head -4
+```
+
+实测输出前两行：
+
+```text
+46:  AgentStreamRoute --> AgentProjection[lib/agent-stream-projection.ts]
+96:lib/agent-stream-projection.ts      AgentEvent to SSE API event projection
+```
+
+第 96 行来自 Layer Map。按这条路径打开文件，就能对照正文描述的 projection 职责。任何一次找不到、对不上，都说明文档欠了一次同步更新。

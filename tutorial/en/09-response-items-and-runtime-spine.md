@@ -136,3 +136,27 @@ express that difference.
 This chapter moves the agent from step-driven to history-driven: model-visible
 response items become the source of truth, the scheduler controls tool batches,
 and the runtime spine connects model calls with tool execution.
+
+## Chapter Checkpoint
+
+Verify that the shape of model-visible history is locked down by deterministic
+tests (no key, fake gateway):
+
+```bash
+npx tsx --test --test-name-pattern "records" tests/agent-sampling-loop.test.ts
+```
+
+Measured output:
+
+```text
+✔ records working message, function call, tool output, and final response
+✔ records built-in read tool output through the sampling loop
+ℹ pass 2
+```
+
+The first case asserts the full runtime-spine cycle item by item: assistant
+working message, `function_call`, `function_call_output`, and final response
+each land in history in order. The second proves that the real built-in `read`
+tool's output also lands in `function_call_output`. Open
+`tests/agent-sampling-loop.test.ts` next to those assertions — they are the
+executable version of this chapter's history contract.

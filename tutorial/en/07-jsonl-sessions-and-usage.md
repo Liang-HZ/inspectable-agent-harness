@@ -136,3 +136,35 @@ is a run record, not only log output.
 This chapter establishes durable run records: events append to JSONL, usage is
 stored in raw and normalized forms, sessions can be read by the frontend, and
 Debug and Session semantics stay separate.
+
+## Chapter Checkpoint
+
+Verify the session read API and the JSONL layout on disk.
+
+1. The real empty response when no sessions exist (just start the dev server;
+   no key required):
+
+```bash
+curl -s http://localhost:3000/api/agent/sessions
+```
+
+Measured output:
+
+```json
+{"ok":true,"sessions":[]}
+```
+
+Note that it is still the discriminated `ok/sessions` shape, not a bare array —
+an empty list goes through the same contract.
+
+2. Requires `.env.local` configured per chapter 0: after one agent run, inspect
+   the disk:
+
+```bash
+find data/agent-sessions -name '*.jsonl'
+```
+
+Expect `data/agent-sessions/YYYY/MM/DD/rollout-{timestamp}-{runId}.jsonl`. With
+`head -3`, each line is tagged JSON: the first two rows have `type`
+`session_meta` and `turn_context`, followed by `agent_event` and
+`response_item` rows. `GET /api/agent/sessions` then returns a non-empty list.

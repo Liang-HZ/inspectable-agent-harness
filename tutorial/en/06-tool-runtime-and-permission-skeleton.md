@@ -162,3 +162,28 @@ permission skeleton keeps future shell behavior from becoming special-case code.
 This chapter upgrades tool execution into a runtime contract. Tools describe
 capability, the runtime orchestrates execution, and the permission skeleton
 leaves room for sandbox and approval behavior.
+
+## Chapter Checkpoint
+
+Verify that the key invariants of the tool contract and permission skeleton are
+locked down by tests (no key required):
+
+```bash
+npx tsx --test tests/agent-tool-contracts.test.ts
+```
+
+Measured: all 6 cases pass:
+
+```text
+✔ tool groups expose current builtin surface
+✔ current tool definitions declare runtime metadata explicitly
+✔ provider-visible tools do not include runtime metadata
+✔ provider-visible editing tools depend on run sandbox mode
+✔ path access policies enforce current project and allowed roots
+✔ relative path resolution follows the active path policy base
+ℹ pass 6
+```
+
+`provider-visible tools do not include runtime metadata` maps directly onto
+this chapter's "tool facts versus policy" boundary; the two path policy cases
+cover the rule that `sandboxMode` decides the effective pathAccess.

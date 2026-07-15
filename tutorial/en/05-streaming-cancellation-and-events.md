@@ -158,3 +158,36 @@ frontend protocol and preserves richer internal semantics for future telemetry.
 This chapter turns an agent run into a live process: the frontend receives
 events, the runtime reacts to abort, and internal events are projected into a
 frontend protocol.
+
+## Chapter Checkpoint
+
+Verify two things: validation failure never opens the SSE stream, and terminal
+run events are locked down by deterministic tests.
+
+1. POST an empty body to `/api/agent/stream` (no key required). Measured: the
+   response is a plain JSON 400 (`content-type: application/json`), not an SSE
+   error event — validation completes before the stream opens:
+
+```bash
+curl -s -i -X POST http://localhost:3000/api/agent/stream \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+```text
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
+{"ok":false,"error":"Request body validation failed.","validationErrors":{"formErrors":[],"fieldErrors":{"task":["Field `task` is required."]}}}
+```
+
+2. Terminal-event tests (no key, fake gateway):
+
+```bash
+npx tsx --test tests/agent-run-terminal-events.test.ts
+```
+
+```text
+✔ an aborted run emits run_cancelled as its terminal event
+✔ a failed run emits run_failed as its terminal event
+ℹ pass 2
+```

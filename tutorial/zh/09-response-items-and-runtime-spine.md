@@ -120,3 +120,21 @@ Runtime spine 是 loop 的骨架，但完整 run 还包括输入、事件、sess
 ## 本章小结
 
 这一章把 agent 从 step-driven 推进到 history-driven：模型可见 response item 成为事实来源，scheduler 控制轮次，runtime spine 串起模型调用和工具执行。
+
+## 本章验证点
+
+验证 model-visible history 的形状被确定性测试锁定（无需 key，fake gateway）：
+
+```bash
+npx tsx --test --test-name-pattern "records" tests/agent-sampling-loop.test.ts
+```
+
+实测输出：
+
+```text
+✔ records working message, function call, tool output, and final response
+✔ records built-in read tool output through the sampling loop
+ℹ pass 2
+```
+
+第一个用例逐项断言 runtime spine 的完整轮回：assistant working message、`function_call`、`function_call_output`、final response 依次写入 history；第二个用例证明真实内置 `read` 工具的输出同样落进 `function_call_output`。打开 `tests/agent-sampling-loop.test.ts` 对照这两个用例的断言，就是本章 history 契约的可执行版本。

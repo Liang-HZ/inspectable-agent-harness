@@ -145,3 +145,25 @@ Shell 很强，但也带来最大安全面。先建立 runtime 和 permission sk
 ## 本章小结
 
 这一章把工具执行从普通函数提升为 runtime contract。工具描述能力，runtime 负责编排，permission skeleton 为未来 sandbox 和 approval 留出位置。
+
+## 本章验证点
+
+验证 tool contract 与 permission skeleton 的关键不变量已被测试锁定（无需 key）：
+
+```bash
+npx tsx --test tests/agent-tool-contracts.test.ts
+```
+
+实测 6 个用例全过：
+
+```text
+✔ tool groups expose current builtin surface
+✔ current tool definitions declare runtime metadata explicitly
+✔ provider-visible tools do not include runtime metadata
+✔ provider-visible editing tools depend on run sandbox mode
+✔ path access policies enforce current project and allowed roots
+✔ relative path resolution follows the active path policy base
+ℹ pass 6
+```
+
+其中 `provider-visible tools do not include runtime metadata` 直接对应本章"tool facts 与 policy 分开"的边界；两个 path policy 用例对应 `sandboxMode` 决定 effective pathAccess 的规则。

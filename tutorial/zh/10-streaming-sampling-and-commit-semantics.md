@@ -186,3 +186,31 @@ Provider 的 `final_answer` 是 provider message 级别的元数据。Agent 的 
 - provider dialect 负责格式转换，agent loop 负责语义判断
 
 这个设计让过程输出可以真正流式，同时保留确定性的工具执行和最终答案判断。
+
+## 本章验证点
+
+验证 commit 语义的两条规则：没有提交点的 delta 是协议错误；没有工具调用的完成轮次才产生最终答案。以下命令都无需 key。
+
+1. 协议错误用例——delta 缺少 commit 必须报错：
+
+```bash
+npx tsx --test --test-name-pattern "commit|deltas" tests/agent-sampling-loop.test.ts
+```
+
+实测输出：
+
+```text
+✔ rejects streamed text without an assistant message commit
+✔ rejects tool argument deltas without a completed tool call
+ℹ pass 2
+```
+
+2. 最终答案判定用例——无工具调用的完成轮次即 final response：
+
+```bash
+npx tsx --test --test-name-pattern "no-tool" tests/agent-sampling-loop.test.ts
+```
+
+实测输出：`✔ uses a no-tool assistant message as the final response`，`pass 1`。
+
+这三个用例分别对应本章的提交点规则（`assistant_message_done` / `tool_call_committed`）和 agent finality 规则。

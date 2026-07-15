@@ -129,3 +129,31 @@ OpenAI strict schema 有自己的限制。内部工具契约应该表达 agent r
 ## 本章小结
 
 这一章把 provider 差异隔离到 dialect 层：runtime 使用稳定 IR，dialect 负责编译 request、解析 stream、转换 tool schema 和 usage。
+
+## 本章验证点
+
+验证 dialect 层的两条硬规则：tool schema 由 dialect 编译；agent loop 不 import provider wire types。
+
+1. OpenAI strict tool schema 编译测试（无需 key）：
+
+```bash
+npx tsx --test tests/openai-tool-schema.test.ts
+```
+
+实测输出：
+
+```text
+✔ OpenAI strict tool schema marks every property as required
+✔ OpenAI strict tool schema represents optional properties with null type
+ℹ pass 2
+```
+
+这两个用例证明的正是本章的 Tool Schema Boundary：内部 `inputSchema` 是 provider-neutral 的，strict 模式下"全字段 required、可选字段用 null type 表达"由 OpenAI dialect 编译出来，而不是写进工具契约本身。
+
+2. 检查 boundary 没有泄漏（实测无输出，命令退出码为 1 即通过）：
+
+```bash
+grep -n "ChatCompletionMessage\|ResponseStreamEvent" lib/agent.ts
+```
+
+如果这条 grep 有输出，按本章"重要规则"，说明 dialect boundary 已经泄漏进 agent loop。

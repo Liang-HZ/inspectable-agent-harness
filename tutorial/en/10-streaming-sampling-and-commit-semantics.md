@@ -220,3 +220,34 @@ This chapter establishes the core rule for real agent streaming:
 
 This design allows process text to stream for real while preserving
 deterministic tool execution and final-answer detection.
+
+## Chapter Checkpoint
+
+Verify the two commit-semantics rules: a delta without a commit point is a
+protocol error, and only a completed round with no tool calls produces the
+final answer. No key is required for any of these.
+
+1. Protocol error cases — deltas missing their commit must fail:
+
+```bash
+npx tsx --test --test-name-pattern "commit|deltas" tests/agent-sampling-loop.test.ts
+```
+
+Measured output:
+
+```text
+✔ rejects streamed text without an assistant message commit
+✔ rejects tool argument deltas without a completed tool call
+ℹ pass 2
+```
+
+2. Final-answer detection — a no-tool completed round is the final response:
+
+```bash
+npx tsx --test --test-name-pattern "no-tool" tests/agent-sampling-loop.test.ts
+```
+
+Measured: `✔ uses a no-tool assistant message as the final response`, `pass 1`.
+
+These three cases map onto this chapter's commit points
+(`assistant_message_done` / `tool_call_committed`) and the agent finality rule.

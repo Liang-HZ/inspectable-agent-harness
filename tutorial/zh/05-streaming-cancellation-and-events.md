@@ -147,3 +147,33 @@ Agent 流式不只是答案分块。它还包括模型过程文本、工具开�
 ## 本章小结
 
 这一章把 agent run 变成 live process：前端可以持续接收事件，runtime 可以响应取消，内部事件通过 projection boundary 转换成前端协议。
+
+## 本章验证点
+
+验证两件事：校验失败不会打开 SSE 流；run 的终态事件有确定性测试兜底。
+
+1. 空 body 打 `/api/agent/stream`（无需 key）。实测返回的是普通 JSON 400（`content-type: application/json`），不是 SSE error event——validation 在流打开之前就完成了：
+
+```bash
+curl -s -i -X POST http://localhost:3000/api/agent/stream \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+```text
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
+{"ok":false,"error":"Request body validation failed.","validationErrors":{"formErrors":[],"fieldErrors":{"task":["Field `task` is required."]}}}
+```
+
+2. 终态事件测试（无需 key，fake gateway）：
+
+```bash
+npx tsx --test tests/agent-run-terminal-events.test.ts
+```
+
+```text
+✔ an aborted run emits run_cancelled as its terminal event
+✔ a failed run emits run_failed as its terminal event
+ℹ pass 2
+```

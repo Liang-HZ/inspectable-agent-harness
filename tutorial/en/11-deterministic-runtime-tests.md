@@ -118,3 +118,32 @@ calls, missing committed messages, and invalid schemas all need coverage.
 This chapter builds the testing foundation: fake gateways fix model behavior,
 real tools prove integration, and assertions prove loop semantics rather than
 model quality.
+
+## Chapter Checkpoint
+
+Verify that "no real model required" holds literally: on a machine with no
+`.env.local` and no `OPENAI_*` environment variables, run the whole suite:
+
+```bash
+npm test
+```
+
+Measured tail output:
+
+```text
+ℹ tests 103
+ℹ suites 0
+ℹ pass 103
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1651.784667
+```
+
+103 cases, about 1.6 seconds, zero network requests, zero keys. This is
+possible because the fake gateway pins model behavior as scripted
+`AgentModelStreamEvent[]` rounds while real tools execute against the local
+filesystem — so loop semantics, history shapes, and error paths are all
+assertable without a key. A real provider only needs to show up for smoke
+tests.
