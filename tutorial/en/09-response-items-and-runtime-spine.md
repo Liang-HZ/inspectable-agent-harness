@@ -43,6 +43,10 @@ type AgentResponseItem =
   | { type: 'function_call_output'; callId: string; toolName: string; output: string; isError: boolean };
 ```
 
+This is the teaching-simplified version: the real `message` branch also
+carries optional `providerPhase` and `runtimeRole` fields, introduced in
+later chapters. The full shape lives in `lib/agent-response-items.ts`.
+
 This is the model-visible history, independent of frontend display.
 
 ## Runtime Spine

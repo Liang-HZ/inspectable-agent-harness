@@ -61,7 +61,8 @@ needs_review  无法证明只读,交回给 approval policy
 2. 命令按 `|` 拆成 pipeline segments，每一段独立判断，全部安全才算安全。`grep -c export lib/agent.ts | cat` 是安全的；`cat a.txt | sh` 不是。
 3. 每段用一个只支持引号的迷你 tokenizer 拆词。出现反斜杠转义或未闭合引号，直接 `needs_review`。
 4. `argv[0]` 必须在只读命令白名单里：`ls`、`cat`、`grep`、`rg`、`head`、`tail`、`wc`、`find`、`git` 等。
-5. 两个命令有额外的参数检查：`find` 不允许 `-delete`/`-exec` 等动作 flag;`git` 只允许 `status`/`log`/`diff`/`show` 等只读 subcommand,`git branch` 只允许纯列举用法。
+5. 命令名在白名单里还不够，参数也要筛查——因为 safe 命令会完全跳过 approval。任何指向项目外的路径参数（绝对路径、`~` 开头、含 `..` 段，包括 `--flag=value` 里的值）都降级 `needs_review`：`cat` 是只读命令，但 `cat /etc/passwd` 不是只读模式。
+6. 能写文件或执行程序的 flag 按命令拒绝：`sort`/`tree` 拒绝 `-o`/`--o` 前缀（同时覆盖 `-ofile` 这类粘连形式和 `--out=` 这类 GNU 长选项缩写）；`rg` 拒绝 `--pre`/`--hostname-bin`；`uniq` 最多一个位置参数（第二个位置参数是输出文件）；`find` 不允许 `-delete`/`-exec` 等动作 flag；`git` 只允许 `status`/`log`/`diff`/`show` 等只读 subcommand，拒绝 subcommand 之前的全局 flag（`-C`、`-c`、`--git-dir`、`--exec-path` 能重定向仓库或改变 git 执行的程序）和 subcommand 之后的 `--output`，`git branch` 只允许纯列举用法。
 
 关键设计取舍：**分类器宁可漏放，不可错放**。`echo $HOME` 明明无害，但 `$` 被拒绝，因为允许变量展开意味着要分析展开后的结果。保守的代价是多一次 approval，错放的代价是执行了未经批准的任意命令。
 
@@ -119,6 +120,10 @@ command 缺失或空          -> deny VALIDATION_ERROR
 
 `bash -c` 启动子进程，`stdio` 里 stdin 直接 ignore(没有交互能力，这是有意的边界)。
 
+子进程的环境变量是白名单构造的（`PATH`、`HOME`、`USER`、`TERM`、`TMPDIR`、`LANG`/`LC_*` 等无害变量），而不是继承完整的 `process.env`：否则一条被批准的 `printenv` 或 `env` 就会把 `OPENAI_API_KEY` 带进 model-visible 输出和 session JSONL。选白名单而不是"剔除已知秘密名"的黑名单，是因为黑名单永远列不全。
+
+`workdir` 参数与文件工具走同一套 realpath-后复查序列：先按 path policy 解析路径，再对 `realpath` 的结果重新检查一遍 path policy。一个字面上在项目内的 workdir 仍可能是符号链接，真实目录在项目外——复查挡住这种逃逸。
+
 输出按流收集，每个流两个上限：
 
 ```text
@@ -163,11 +168,25 @@ stderr:
 `tests/agent-shell-builtins.test.ts`:
 
 - 分类器 safe/needs_review 的代表性命令矩阵
-- read-only run:safe 命令放行、unsafe 命令 deny
+- 白名单命令带路径逃逸或可写/可执行参数时降级 review（`cat /etc/passwd`、`sort -o` 等）
+- read-only run:safe 命令放行、unsafe 命令 deny、带项目外参数的白名单命令 deny
 - workspace_write + on_request:unsafe 命令抛 approval required
-- workdir 越界被 path policy 拒绝(override 推翻不了)
+- workdir 越界被 path policy 拒绝(override 推翻不了)，指向项目外的 workdir 符号链接同样被拒
+- 子进程环境不含 harness secrets（`OPENAI_API_KEY` 不会进入命令输出）
 - 非零 exit code 是正常输出、超大输出截断、`sleep 30` 在 1 秒超时被 kill
 - 空 command 在 permission 边界返回 VALIDATION_ERROR
+
+## 为什么分类器不是安全边界
+
+分类器的角色是**省审批**，不是执行边界。它回答的问题从头到尾只有一个："这条命令能不能跳过 approval"——它从来不是"这条命令执行后会发生什么"的裁决者。
+
+这个区别不是理论上的。本章的分类器修复过一个真实漏洞：早期版本只看命令名，于是 read_only 模式下 `cat /etc/passwd` 免审放行（`cat` 在白名单里），`sort -o /tmp/x` 能越权写文件（`sort` 也在白名单里）。根因就是把"命令名安全"当成了"命令安全"。参数级筛查修掉了这两个洞，但要看清它修到了哪一层。
+
+加上参数筛查之后，分类器仍然是一个**词法筛查**：它看的是命令字符串长什么样，不是命令运行时真正触碰什么。它跟不进符号链接——`cat ./innocent.txt` 在词法上完全干净，但如果 `innocent.txt` 是指向 `/etc/passwd` 的链接，读到的还是项目外的文件。它也看不见命令的运行时行为：一个白名单命令可以被 `PATH` 上的同名程序顶替（本项目用 env 白名单缓解了一部分，但没有根治）。词法筛查每堵一个洞，都还留着它原理上堵不住的洞。
+
+生产 harness 的答案是在分类器下面再放一层 OS 级强制：Codex 在 macOS 用 Seatbelt、Linux 用 Landlock，把文件系统和网络访问在内核层锁死，命令字符串骗得过词法分析、骗不过内核；Claude Code 也有 sandbox 模式做同类隔离。在那种架构里，分类器负责减少审批打扰，沙箱负责兜底——两层各管一件事。
+
+本项目明确不实现 OS 沙箱，把边界画在这里。这不是遗漏，而是教学取舍：OS 沙箱是平台相关的深水区，而"分类器省审批、permission 边界做决策、真正的执行强制缺位"这个结构本身就是要教的内容。使用这个 harness 时应该记住：unsafe 命令一旦被批准，就是在你的机器上裸跑。
 
 ## 本章小结
 

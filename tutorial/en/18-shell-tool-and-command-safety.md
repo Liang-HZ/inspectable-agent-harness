@@ -88,10 +88,22 @@ Classification order:
    escapes or an unterminated quote are `needs_review`.
 4. `argv[0]` must be in the read-only command allowlist: `ls`, `cat`,
    `grep`, `rg`, `head`, `tail`, `wc`, `find`, `git`, and so on.
-5. Two commands get extra argument checks: `find` rejects action flags like
-   `-delete`/`-exec`; `git` only allows read-only subcommands such as
-   `status`/`log`/`diff`/`show`, and `git branch` only in bare listing
-   form.
+5. An allowlisted name is not enough — arguments are screened too, because
+   safe commands skip approval entirely. Any path argument that points
+   outside the project (an absolute path, a leading `~`, or a `..`
+   segment, including values inside `--flag=value`) falls back to
+   `needs_review`: `cat` is a read-only command, but `cat /etc/passwd` is
+   not a read-only pattern.
+6. Flags that can write files or execute programs are denied per command:
+   `sort`/`tree` reject `-o`/`--o` prefixes (which also covers attached
+   forms like `-ofile` and GNU long-option abbreviations like `--out=`);
+   `rg` rejects `--pre`/`--hostname-bin`; `uniq` allows at most one
+   positional argument (a second one is an output file); `find` rejects
+   action flags like `-delete`/`-exec`; `git` only allows read-only
+   subcommands such as `status`/`log`/`diff`/`show`, rejects global flags
+   before the subcommand (`-C`, `-c`, `--git-dir`, `--exec-path` can
+   retarget the repository or the programs git runs) and `--output` after
+   it, and `git branch` is safe only in bare listing form.
 
 The key tradeoff: **the classifier prefers false negatives over false
 positives**. `echo $HOME` is harmless, but `$` is rejected, because
@@ -166,6 +178,19 @@ approval/resume is the next chapter's topic.
 `bash -c` starts the child process with stdin ignored (no interactivity,
 an intentional boundary).
 
+The child's environment is built from an allowlist (`PATH`, `HOME`,
+`USER`, `TERM`, `TMPDIR`, `LANG`/`LC_*`, and other harmless variables)
+rather than inherited from the full `process.env`: otherwise one approved
+`printenv` or `env` would put `OPENAI_API_KEY` into model-visible output
+and the session JSONL. It is an allowlist instead of a "strip known
+secret names" denylist because a denylist is never complete.
+
+The `workdir` argument goes through the same realpath-then-recheck
+sequence as the file builtins: resolve the path under path policy, then
+recheck the policy against the `realpath` result. A lexically in-project
+workdir can still be a symlink whose real directory lives outside the
+project — the recheck blocks that escape.
+
 Output is collected per stream with two caps:
 
 ```text
@@ -226,12 +251,58 @@ stderr:
 `tests/agent-shell-builtins.test.ts`:
 
 - a representative command matrix for safe/needs_review classification
-- read-only runs: safe commands allowed, unsafe commands denied
+- allowlisted commands demoted to review when arguments escape the
+  project or can write/execute (`cat /etc/passwd`, `sort -o`, ...)
+- read-only runs: safe commands allowed, unsafe commands denied,
+  allowlisted commands with project-escaping arguments denied
 - workspace_write + on_request: unsafe commands throw approval required
-- workdir escapes denied by path policy (not overridable)
+- workdir escapes denied by path policy (not overridable), including a
+  workdir symlink whose real directory is outside the project
+- the child environment carries no harness secrets (`OPENAI_API_KEY`
+  never reaches command output)
 - non-zero exit codes as normal output, oversized output truncation, and
   `sleep 30` killed at a 1-second timeout
 - empty command returns VALIDATION_ERROR at the permission boundary
+
+## Why A Classifier Is Not A Sandbox
+
+The classifier's job is to **save approvals**, not to bound execution. The
+only question it ever answers is "can this command skip approval" — it was
+never the arbiter of "what happens when this command runs".
+
+That distinction is not theoretical. This chapter's classifier had a real
+vulnerability fixed: the early version looked only at the command name, so
+in read_only mode `cat /etc/passwd` sailed through without review (`cat`
+is allowlisted) and `sort -o /tmp/x` could write a file it had no business
+writing (`sort` is allowlisted too). The root cause was treating "the name
+is safe" as "the command is safe". Argument screening closed both holes —
+but it is worth seeing exactly which layer it closed them at.
+
+Even with argument screening, the classifier is still a **lexical
+screen**: it looks at what the command string says, not at what the
+command actually touches at runtime. It cannot follow symlinks —
+`cat ./innocent.txt` is lexically clean, but if `innocent.txt` links to
+`/etc/passwd`, the read still lands outside the project. And it cannot see
+runtime behavior: an allowlisted name can be shadowed by a same-named
+program on `PATH` (the env allowlist in this project mitigates part of
+that, but does not cure it). Every hole a lexical screen plugs leaves
+behind the holes it cannot plug in principle.
+
+Production harnesses answer this with an OS-level enforcement layer
+underneath the classifier: Codex uses Seatbelt on macOS and Landlock on
+Linux to lock down filesystem and network access in the kernel — a command
+string can fool lexical analysis, but not the kernel. Claude Code has a
+sandbox mode for the same kind of isolation. In that architecture the
+classifier reduces approval friction and the sandbox provides the
+backstop; each layer owns exactly one job.
+
+This project deliberately does not implement an OS sandbox and draws its
+boundary here. That is not an omission but a teaching tradeoff: OS
+sandboxing is deep, platform-specific territory, and the structure itself
+— classifier saves approvals, permission boundary decides, real execution
+enforcement absent — is part of what this book sets out to teach. When
+using this harness, remember: once an unsafe command is approved, it runs
+bare on your machine.
 
 ## Chapter Summary
 

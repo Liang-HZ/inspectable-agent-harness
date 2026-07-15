@@ -109,9 +109,36 @@ Those criticisms drove later changes:
 At this stage, verification was mainly:
 
 ```bash
-curl -s -X POST http://localhost:3000/api/agent ...
+curl -X POST http://localhost:3000/api/agent \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task": "Design the next agent capability for this project.",
+    "goal": "Keep the implementation small and clear.",
+    "context": "The project already has /api/chat.",
+    "temperature": 0.4
+  }'
 npm run typecheck
 npm run build
+```
+
+A successful response carries the final answer plus inspectable steps:
+
+```json
+{
+  "ok": true,
+  "result": {
+    "model": "gpt-4o-mini",
+    "answer": "...",
+    "steps": [
+      {
+        "order": 1,
+        "title": "Read task",
+        "detail": "..."
+      }
+    ],
+    "usage": null
+  }
+}
 ```
 
 Later chapters add deterministic tests that prove the runtime without real

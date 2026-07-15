@@ -98,9 +98,36 @@ model answers
 这个阶段主要靠：
 
 ```bash
-curl -s -X POST http://localhost:3000/api/agent ...
+curl -X POST http://localhost:3000/api/agent \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task": "帮我设计一个下一步 agent 能力。",
+    "goal": "保持实现小而清晰。",
+    "context": "当前项目已经有 /api/chat。",
+    "temperature": 0.4
+  }'
 npm run typecheck
 npm run build
+```
+
+成功响应包含最终回答和可检查的 steps：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "model": "gpt-4o-mini",
+    "answer": "...",
+    "steps": [
+      {
+        "order": 1,
+        "title": "Read task",
+        "detail": "..."
+      }
+    ],
+    "usage": null
+  }
+}
 ```
 
 后面的章节会加入 deterministic tests，不靠真实 provider 也能证明 runtime。

@@ -8,6 +8,7 @@
 - 压缩为什么必须复用同一个 model gateway，而不是新开一条调用路径
 - 为什么 function_call/function_call_output 的配对不变量在这里几乎是免费的
 - 压缩发生在 loop 的哪个边界，为什么必须是那个边界
+- compaction 如何在 session resume 之后依然生效，以及最初的版本为什么会失效
 - 为什么这不是一个可以直接套用到生产环境的阈值设计
 
 ## 背景
@@ -85,6 +86,16 @@ round N+1 开始
 
 压缩替换了内存里的 `history` 数组内容(`history.length = 0; history.push(...)`)，但写回 JSONL 时只 `appendAgentResponseItem` 那一条新的 `compaction_summary` 记录——被丢弃的旧 `assistant`/`function_call`/`function_call_output` 记录早就在提交时写过一次了，JSONL 依然是完整的 append-only 审计轨迹，只是内存里代表"发给模型的当前历史"变短了。这和第 20 章"只追加新内容"的设计原则完全一致。
 
+## Compaction 与 Resume 的交互
+
+压缩改变的是内存里的 history，而第 20 章的 resume 是从 JSONL 重建 history 的。这两个机制必须对齐，否则会出现一个隐蔽的失效模式——而它确实出现过：**最初的版本里，resume 把所有 response_item 原样读回**，于是一个压缩过的 session 在下一轮续接时，被丢弃的旧历史全部复活，未压缩的全文重新发给模型。压缩在单次 run 内工作正常，一跨 run 就静默失效——正是最需要它的场景。
+
+修复方式不是给 JSONL 加一种新的记录类型，而是让已有的 `compaction_summary` 行**兼任重放标记**：`lib/agent-session-store.ts` 的 `replayAgentResponseItemHistory` 按写入顺序遍历 response items，每遇到一条 `compaction_summary`，就对"至此累积的历史"重新调用 `applyAgentHistoryCompaction`。这能成立，依赖一个关键性质：`applyAgentHistoryCompaction` 是 `(至此的历史, 摘要文本)` 的**纯函数**——没有隐藏输入、不依赖运行时状态，所以 resume 时重放它，得到的结果和当时运行时内存里的压缩结果逐条一致。
+
+JSONL 文件本身不需要任何改动：它保持 append-only，不缩水，被丢弃的记录仍然完整在盘上供审计。"发给模型的当前历史"从来不是文件内容本身，而是从文件**重放**出来的派生状态。
+
+这个 bug 值得记住的不是修法，而是它揭示的普适教训：在任何事件溯源式的系统里，**派生状态必须能从记录重放出来**。如果运行时对状态做了一次变换（这里是压缩），而重放路径不知道这个变换，两边就会分叉——而且分叉是静默的，要到跨 run 的行为出错时才暴露。写入时多存一个标记、读取时重放同一个纯函数，是让"记录"和"状态"重新收敛的最小修法。
+
 ## 事件与前端
 
 新增内部事件 `history_compacted`，投影为一等的 debug 事件 `historyCompacted`(不是主链路事件——压缩不需要用户决策，只需要可观测)。Debug Console 新增一个 "Compactions" 统计格和专门的卡片区，展示每次压缩的 token 数、移除/保留的条目数、触发原因，以及一个可展开的 "Summary sent to the model" 详情。
@@ -109,6 +120,7 @@ round N+1 开始
 
 - [`tests/agent-compaction.test.ts`](../../tests/agent-compaction.test.ts):`decideAgentHistoryCompaction` 的 null/低于阈值/历史太短/触发四种路径；`serializeAgentHistoryForSummaryPrompt` 对每种 item 类型的渲染；`buildCompactionSummaryRequest` 不带 tools;`applyAgentHistoryCompaction` 保留 system+summary+近期 user、不留孤儿 function_call、预算内保底保留最新 user 消息、预算耗尽丢弃更旧的、没有 leading system message 时依然工作
 - [`tests/agent-sampling-loop.test.ts`](../../tests/agent-sampling-loop.test.ts) 新增集成测试：usage 报告达到阈值后，`runSamplingLoop` 真的调用了 `createResponse`，历史被替换，`history_compacted` 事件正确记录 token 数和摘要文本，**下一轮**的 `streamResponse` 请求收到的确实是压缩后的 messages 数量(3 条，而不是压缩前的 4 条)
+- [`tests/agent-session-store.test.ts`](../../tests/agent-session-store.test.ts) 的 "resumeAgentSession replays compaction instead of returning the uncompacted transcript"：一个压缩过的 session 被 resume 时，重建出的 history 是重放压缩后的形态，而不是未压缩全文
 - Debug Console 的可视化通过临时注入假状态手动验证(截图记录):Compaction 卡片正确展示 token 数、移除/保留计数、原因和可展开摘要
 
 ## 本章小结

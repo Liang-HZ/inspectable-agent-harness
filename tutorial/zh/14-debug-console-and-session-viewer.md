@@ -105,7 +105,7 @@ lib/agent-stream-projection.ts
 
 ## 当前状态
 
-这一层当前还没有进入 git commit，但已经在 working tree 中，是当前真实能力的一部分。
+这一层把 Debug Console 和 Session Viewer 变成 workbench 的常驻能力：模型输入输出、工具细节、permission audit 和 JSONL session 记录各有稳定的查看入口，是排查 agent 行为的第一手工具。
 
 ## 验证
 

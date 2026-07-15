@@ -123,8 +123,8 @@ exploration, not on a custom demo function.
 
 ## Current Status
 
-This layer is in the current working tree and documented in
-`docs/evolution.md` as Tool Runtime Boundary v1.
+This layer establishes the agent's own tool contract boundary and is
+documented in `docs/evolution.md` as Tool Runtime Boundary v1.
 
 ## Common Misunderstandings
 

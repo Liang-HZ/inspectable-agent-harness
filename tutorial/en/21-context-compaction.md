@@ -17,6 +17,8 @@ After reading this chapter, you should understand:
   free here
 - which boundary in the loop compaction happens at, and why it has to be
   that boundary
+- how compaction keeps working across session resume, and why the first
+  version silently didn't
 - why this isn't a threshold design you can drop straight into production
 
 ## Background
@@ -162,6 +164,42 @@ JSONL stays a complete append-only audit trail; only the in-memory "current
 history sent to the model" gets shorter. This is exactly the same "append
 only what's new" principle chapter 20 established.
 
+## How Compaction Interacts With Resume
+
+Compaction changes the in-memory history, while chapter 20's resume
+rebuilds history from JSONL. These two mechanisms have to agree, or a
+subtle failure mode appears — and it actually did: **in the first version,
+resume read every response_item back verbatim**. Continue a compacted
+session for another turn, and all the discarded old history came back to
+life — the uncompacted transcript went to the model in full. Compaction
+worked within a single run and silently failed the moment a run boundary
+was crossed — exactly the scenario it was needed for most.
+
+The fix is not a new JSONL record type. Instead, the existing
+`compaction_summary` row **doubles as the replay marker**:
+`replayAgentResponseItemHistory` in `lib/agent-session-store.ts` walks the
+response items in write order, and at each `compaction_summary` it
+re-applies `applyAgentHistoryCompaction` to the history accumulated so
+far. This works because of one key property: `applyAgentHistoryCompaction`
+is a **pure function** of `(history so far, summary text)` — no hidden
+inputs, no dependence on runtime state — so replaying it during resume
+reconstructs, item for item, the compacted history the live run held in
+memory.
+
+The JSONL file itself needs no change: it stays append-only and never
+shrinks, and the discarded records remain fully on disk for audit. The
+"current history sent to the model" was never the file's contents — it is
+derived state, **replayed** from the file.
+
+What makes this bug worth remembering is not the fix but the general
+lesson it exposes: in any event-sourced system, **derived state must be
+reproducible by replaying the record**. If the runtime applies a transform
+to its state (here, compaction) and the replay path doesn't know about
+that transform, the two sides diverge — silently, until some cross-run
+behavior goes wrong. Persisting one marker on write and replaying the same
+pure function on read is the smallest fix that makes the record and the
+state converge again.
+
 ## Events And Frontend
 
 A new internal event `history_compacted` projects to a first-class debug
@@ -215,6 +253,10 @@ an expandable "Summary sent to the model" detail.
   `history_compacted` event correctly records the token count and summary
   text, and **the next round's** `streamResponse` request receives the
   compacted message count (3, not the pre-compaction 4)
+- [`tests/agent-session-store.test.ts`](../../tests/agent-session-store.test.ts)'s
+  "resumeAgentSession replays compaction instead of returning the
+  uncompacted transcript": resuming a compacted session reconstructs the
+  replayed, compacted history rather than the full transcript
 - The Debug Console visualization was verified manually by temporarily
   injecting fake state and screenshotting: the Compaction card correctly
   shows the token count, removed/kept counts, reason, and expandable

@@ -101,8 +101,9 @@ useful diagnostic capability.
 
 ## Current Status
 
-This layer is in the current working tree and should be committed with the
-surrounding runtime changes.
+This layer removes the artificial round cap and replaces it with runtime
+guardrails: abort, fatal errors, no-tool completion, and the repeated-call
+guard together decide when the loop ends.
 
 ## Common Misunderstandings
 

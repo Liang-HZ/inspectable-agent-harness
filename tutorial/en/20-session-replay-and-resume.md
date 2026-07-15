@@ -77,9 +77,19 @@ one the sidebar should use to highlight "the current conversation."
 ```text
 1. Find the JSONL file path by sessionId (reuses chapter 7's findAgentSessionPathById)
 2. Read every response_item record and rebuild AgentResponseItem[] in write order
-3. Run normalization (see next section)
-4. Return { session, history, synthesizedItems }
+3. Replay compactions (replayAgentResponseItemHistory): at each
+   compaction_summary row, re-apply the same compaction transform to the
+   history so far — chapter 21 covers the details
+4. Run normalization (see next section)
+5. Return { session, history, synthesizedItems }
 ```
+
+The response items read back are not handed to the model verbatim: if this
+session went through context compaction in an earlier run, the history
+contains `compaction_summary` rows, and resume must replay the same
+compaction while reading back in order to reconstruct exactly the
+model-visible history the live run held in memory (chapter 21 walks through
+this interaction). Normalization runs after the replay.
 
 There is no in-memory cache here — every resume re-reads from disk. That is
 deliberate: a process restart, a different machine, or even a different
@@ -191,7 +201,7 @@ the same session instead of a new one every turn.
 | Scenario | sessionId input | Session file behavior | History source |
 | --- | --- | --- | --- |
 | Fresh conversation | not provided | created, writes `session_meta` | `system + user` pair |
-| Continue an existing conversation | an existing id | reused, appends `turn_context` + new content | reconstructed history + normalize + new user message |
+| Continue an existing conversation | an existing id | reused, appends `turn_context` + new content | reconstructed history (with compaction replay) + normalize + new user message |
 | Continue a nonexistent id | a nonexistent id | no file created | throws, SSE returns an `error` event |
 | Non-streaming `/api/agent` | provided or not, same result | no session involved (this route never persisted) | always a fresh prompt |
 
@@ -202,9 +212,10 @@ the same session instead of a new one every turn.
   doesn't add one — resume is a streaming-route capability, for the same
   reason approval pause needs SSE to surface a request to the user: a
   non-streaming call is inherently stateless.
-- **No context compaction.** Resume currently means "send the entire history
-  to the model verbatim," so token usage grows linearly as turns accumulate
-  until it hits a limit. That is exactly what the next chapter addresses.
+- **Context compaction did not exist yet when this chapter landed.** Token
+  usage grows linearly as turns accumulate until it hits a limit. The next
+  chapter addresses that — and retrofits resume with the compaction replay
+  you saw as step 3 above.
 - **No "fork from a point in history."** Codex's `fork` can branch a new
   session from a mid-history record; this project can only continue from the
   latest state.

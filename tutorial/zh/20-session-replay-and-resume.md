@@ -55,9 +55,13 @@ runId       每次 /api/agent/stream 调用都新生成,标识"这一轮"
 ```text
 1. 用 sessionId 找到 JSONL 文件路径(复用第 7 章的 findAgentSessionPathById)
 2. 读出全部 response_item 记录,按写入顺序还原成 AgentResponseItem[]
-3. 跑 normalize(见下一节)
-4. 返回 { session, history, synthesizedItems }
+3. 重放 compaction(replayAgentResponseItemHistory):遇到 compaction_summary
+   行,就对至此的历史重新应用同一个压缩变换,细节见第 21 章
+4. 跑 normalize(见下一节)
+5. 返回 { session, history, synthesizedItems }
 ```
+
+读回的 response_item 不是原样照搬给模型的：如果这个 session 在之前的运行里发生过 context compaction，历史里会有 `compaction_summary` 行，resume 必须在读回时重放同样的压缩，才能重建出当时运行时内存里真正的 model-visible history（第 21 章展开这个交互）。重放之后再跑 normalize。
 
 这里没有任何内存缓存——每次 resume 都是从磁盘重新读。这是有意的：进程重启、换一台机器、甚至换一个部署实例，只要 JSONL 文件还在，resume 就该工作。这也是 Codex/Claude Code 的模型：session 状态活在文件里，不活在进程里(和上一章 approval pending state 刻意相反的选择——那个必须活在进程里，因为它对应一个还在运行的 promise)。
 
@@ -126,14 +130,14 @@ Sidebar 的 "Current run" 卡片也加了一行 `continuing session ...` 标记�
 | 场景 | sessionId 输入 | session 文件行为 | history 来源 |
 | --- | --- | --- | --- |
 | 全新对话 | 不传 | 新建，写 `session_meta` | `system + user` 两条 |
-| 继续已有对话 | 传入已存在的 id | 复用文件，追加 `turn_context` + 新内容 | 重建历史 + normalize + 新 user 消息 |
+| 继续已有对话 | 传入已存在的 id | 复用文件，追加 `turn_context` + 新内容 | 重建历史（含 compaction 重放）+ normalize + 新 user 消息 |
 | 继续不存在的 id | 传入不存在的 id | 不创建任何文件 | 抛错，SSE 返回 `error` 事件 |
 | 非流式 `/api/agent` | 传或不传都一样 | 不涉及 session(该路由从未持久化) | 每次都是全新 prompt |
 
 ## 还没做什么
 
 - **非流式 `/api/agent` 路由不支持 resume。** 这条路由从第 4 章开始就没有 session 概念，这次也没有补上——resume 是流式路由的能力，和它依赖 SSE 才能把 approval 请求推给用户是同一个道理：非流式调用本来就是无状态的单次请求。
-- **没有 context compaction。** 现在的 resume 是"把全部历史原样发给模型"，对话轮数多了之后 token 会线性增长直到超限。这正是下一章要解决的问题。
+- **本章落地时还没有 context compaction。** 对话轮数多了之后 token 会线性增长直到超限。下一章解决这个问题，并回头给 resume 补上 compaction 重放——上文步骤 3 就是那次回补的结果。
 - **没有"从某个历史点分叉"。** Codex 的 `fork` 允许从中间某条记录开一个新会话；这个项目目前只能从"最新状态"继续。
 - **Session 面板还是展示单一 JSONL 流，不区分"第几轮"。** 想看清楚多轮结构需要自己读 `turn_context` 记录的顺序。
 

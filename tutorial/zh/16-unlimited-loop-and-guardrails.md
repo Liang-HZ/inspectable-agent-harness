@@ -93,7 +93,7 @@ lib/agent-builtins.ts
 
 ## 当前状态
 
-这一层在当前 working tree 中，应该和周边 runtime 变更一起提交。
+这一层移除了人为轮数上限，把安全兜底换成 runtime guardrails：abort、fatal error、no-tool completion 和 repeated-call guard 共同决定循环何时结束。
 
 ## 常见误解
 

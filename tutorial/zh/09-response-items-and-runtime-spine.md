@@ -40,6 +40,8 @@ type AgentResponseItem =
   | { type: 'function_call_output'; callId: string; toolName: string; output: string; isError: boolean };
 ```
 
+这是教学简化版：真实的 `message` 分支还有 `providerPhase`、`runtimeRole` 等可选字段（后续章节会引入），完整形态见 `lib/agent-response-items.ts`。
+
 这是模型可见 history，独立于 frontend display。
 
 ## Runtime Spine

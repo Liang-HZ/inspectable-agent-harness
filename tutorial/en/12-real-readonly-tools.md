@@ -111,8 +111,9 @@ Relevant commit:
 0b1c88f Add workspace read tools
 ```
 
-Current uncommitted evolution renamed the layer from workspace tools to
-built-in read-only tools and removed the toy tool.
+A later evolution renamed the layer from workspace tools to built-in
+read-only tools and removed the toy tool: the name no longer implies
+"workspace only", and access scope is decided entirely by path policy.
 
 ## Common Misunderstandings
 

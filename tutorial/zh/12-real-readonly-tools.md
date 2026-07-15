@@ -104,7 +104,7 @@ Debug UI 可以看到 structured details。
 0b1c88f Add workspace read tools
 ```
 
-当前未提交演化把这一层从 workspace tools 重命名为 built-in read-only tools，并移除了 toy tool。
+在此之后的演化把这一层从 workspace tools 重命名为 built-in read-only tools，并移除了 toy tool：命名不再暗示"只能访问 workspace"，访问范围完全交给 path policy 决定。
 
 ## 常见误解
 

@@ -115,8 +115,10 @@ lib/agent-stream-projection.ts
 
 ## Current Status
 
-This layer is currently uncommitted in git but present in the working tree. It
-is part of the real current capability.
+This layer makes the Debug Console and Session Viewer a permanent part of the
+workbench: model inputs and outputs, tool details, the permission audit, and
+JSONL session records each have a stable place to be inspected. It is the
+first tool to reach for when diagnosing agent behavior.
 
 ## Verification
 

@@ -101,8 +101,8 @@ curl -N -X POST http://localhost:3000/api/agent/stream \
 ```
 
 The streaming route returns Server-Sent Events. `step` events show agent progress,
-`answerDelta` events stream the final answer text, and `done` carries the final
-result object.
+`assistantDelta` events stream assistant text, `done` carries the final result
+object, and `error` carries stream-time failures.
 
 Error responses use the same discriminant:
 

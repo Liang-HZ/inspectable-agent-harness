@@ -116,7 +116,7 @@ Provider dialect 只接收 `modelTool`。
 
 ## 当前状态
 
-这一层在当前 working tree 中，并在 `docs/evolution.md` 中记录为 Tool Runtime Boundary v1。
+这一层确立了 agent 自己的工具契约边界，并在 `docs/evolution.md` 中记录为 Tool Runtime Boundary v1。
 
 ## 常见误解
 
