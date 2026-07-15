@@ -69,9 +69,9 @@ Three resolution paths:
 
 ```text
 user approves    { type: 'approved', source: 'user' }
-user denies       { type: 'denied', source: 'user', reason }
-timeout            { type: 'denied', source: 'timeout', reason }  (default 120000ms)
-run aborts         { type: 'denied', source: 'abort', reason }
+user denies      { type: 'denied', source: 'user', reason }
+timeout          { type: 'denied', source: 'timeout', reason }  (default 120000ms)
+run aborts       { type: 'denied', source: 'abort', reason }
 ```
 
 Timeout and abort both collapse into `denied` — from the model's perspective,

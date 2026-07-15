@@ -10,6 +10,7 @@ English mirror: [../en/README.md](../en/README.md)
 
 | 章节 | 主题 | 为什么存在 |
 | --- | --- | --- |
+| [00](00-environment-and-first-run.md) | 环境准备与第一次跑通 | 面向跨行读者：装好环境、拿到 API key、在界面和 curl 上第一次跑通 Chat 和 Agent。 |
 | [01](01-project-starting-point.md) | 项目起点与约束 | 建立学习型 repo、显式代码风格和最小可运行 API 路径。 |
 | [02](02-api-contracts-and-validation.md) | API contract 与 validation | 在 agent 复杂度出现前，让 HTTP、DTO、config、service 边界清晰。 |
 | [03](03-living-architecture-and-workbench.md) | Living architecture 与 workbench | 让项目在成长过程中持续解释自己。 |
@@ -33,7 +34,11 @@ English mirror: [../en/README.md](../en/README.md)
 | [21](21-context-compaction.md) | Context Compaction | 到达 token 阈值就自动压缩历史，让长对话不会无限增长。 |
 | [22](22-frontend-dark-mode-and-polish.md) | 前端 Dark Mode 与页面打磨 | 补上系统级 dark mode，并逐页验证 Agent/Chat 工作台的可用性。 |
 
+章节表之外还有一份[附录：前置知识桥](appendix-prerequisites.md)，给跨行读者补 TypeScript union、Zod、App Router、SSE、tool-calling 协议和 async 时序六座桥。
+
 ## 如何阅读
+
+如果你从其他技术栈跨行而来(比如 Java/Python 背景)，先读 00 把环境和 API key 跑通；读正文时遇到概念断层，随时查[前置知识附录](appendix-prerequisites.md)，不必从头补课。
 
 如果是第一次看项目，先读 01 到 05。它们解释这个 repo 为什么重视显式边界和可检查性。
 

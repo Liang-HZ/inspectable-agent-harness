@@ -1,8 +1,8 @@
 # Building An Inspectable Agent Harness
 
 This tutorial reconstructs the project from the beginning to the current
-runtime. It is based on the git history, the current working tree, and the
-design decisions that have been encoded in the codebase.
+runtime. It is based on the git history, the current codebase, and the
+design decisions that have been encoded in it.
 
 It is not a source-code reference. It is a guided explanation of why the code is
 split the way it is.
@@ -13,6 +13,7 @@ Chinese mirror: [../zh/README.md](../zh/README.md)
 
 | Chapter | Topic | Why It Exists |
 | --- | --- | --- |
+| [00](00-environment-and-first-run.md) | Environment setup and first run | For readers crossing over: install the toolchain, get an API key, and complete a first Chat call and Agent run in the UI and with curl. |
 | [01](01-project-starting-point.md) | Project starting point and constraints | Establish the learning repo, explicit style, and smallest runnable API path. |
 | [02](02-api-contracts-and-validation.md) | API contracts and validation | Keep HTTP, DTO, config, and service boundaries readable before agent complexity. |
 | [03](03-living-architecture-and-workbench.md) | Living architecture and workbench | Make the project explain itself as it grows. |
@@ -36,7 +37,18 @@ Chinese mirror: [../zh/README.md](../zh/README.md)
 | [21](21-context-compaction.md) | Context compaction | Compact history automatically once a token threshold is reached, so long conversations don't grow without bound. |
 | [22](22-frontend-dark-mode-and-polish.md) | Frontend dark mode and polish | Add system-level dark mode and verify the Agent/Chat workbench page by page. |
 
+Beyond the chapter table there is an
+[appendix of prerequisite bridges](appendix-prerequisites.md) for readers
+crossing over from another stack: TypeScript unions, Zod, the App Router,
+SSE, the tool-calling protocol, and async ordering.
+
 ## How To Read
+
+If you are crossing over from another stack (say, a Java/Python background),
+read chapter 00 first to get the environment and API key working; while
+reading the main text, consult the
+[prerequisites appendix](appendix-prerequisites.md) whenever you hit a
+concept gap — no need to study it up front.
 
 If you are new to the project, read chapters 01 through 05 first. They explain
 why this repo values explicit boundaries and inspectability.

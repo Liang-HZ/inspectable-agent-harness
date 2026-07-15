@@ -17,10 +17,18 @@ Then fill in:
 OPENAI_API_KEY=sk-your-api-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
+OPENAI_WIRE_API=openai-chat-completions
 ```
 
-For compatible providers, keep the `/v1` suffix when their docs require it and set
-`OPENAI_MODEL` to that provider's model id.
+For compatible providers, keep the `/v1` suffix when their docs require it, set
+`OPENAI_MODEL` to that provider's model id, and keep
+`OPENAI_WIRE_API=openai-chat-completions` (most compatible providers do not
+implement the OpenAI Responses API).
+
+For a step-by-step environment walkthrough (Node, ripgrep, API key options,
+first run), see tutorial chapter 00:
+[`tutorial/zh/00-environment-and-first-run.md`](tutorial/zh/00-environment-and-first-run.md) /
+[`tutorial/en/00-environment-and-first-run.md`](tutorial/en/00-environment-and-first-run.md).
 
 ## Run
 
@@ -122,11 +130,18 @@ lib/env.ts                         environment variable reading
 lib/openai-compatible-client.ts    OpenAI-compatible SDK client
 lib/chat.ts                        model call service
 app/api/agent/route.ts             agent HTTP entry point
-app/api/agent/stream/route.ts      streaming agent HTTP entry point
+app/api/agent/stream/route.ts      streaming agent SSE entry point
 lib/agent-input.ts                 agent request body parsing and validation
-lib/agent.ts                       tool-using agent service
-lib/agent-tools.ts                 local agent tool definitions
+lib/agent.ts                       agent orchestration service
+lib/agent-tools.ts                 tool groups and registry
+lib/agent-builtins.ts              read-only file tools (read, grep, find, ls)
+lib/agent-editing-builtins.ts      write/edit tools
+lib/agent-shell-builtins.ts        shell tool behind a safe-command classifier
+lib/agent-session-store.ts         JSONL session persistence and resume
 ```
+
+This list is a teaser, not the map. The full, maintained module map lives in
+[`docs/architecture.md`](docs/architecture.md).
 
 `route.ts` should stay thin: read the HTTP request, validate input, call the service, and return
 JSON. The service layer should receive plain TypeScript objects instead of `NextRequest`.
