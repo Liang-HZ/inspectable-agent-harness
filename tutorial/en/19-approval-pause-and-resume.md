@@ -272,3 +272,39 @@ from how Codex and Claude Code implement the same boundary, and a judgment
 call about where this layer should stop for now — persisting pending state is
 a bigger capability (it touches process-restart semantics) that can wait
 until something actually needs it.
+
+## Chapter Checkpoint
+
+The approvals module and its loop integration each have a key-free test set.
+Run the module layer first:
+
+```bash
+npx tsx --test tests/agent-approvals.test.ts
+```
+
+Measured tail output:
+
+```text
+✔ interactive tool runtime executes the tool after approval (0.750166ms)
+✔ interactive tool runtime returns a recoverable error after denial (0.245958ms)
+✔ interactive tool runtime denies when the run aborts while waiting for approval (0.169791ms)
+ℹ tests 9
+ℹ pass 9
+ℹ fail 0
+```
+
+Then run the two sampling-loop integration cases by name — continue after
+approval, and continue with a recoverable error after denial:
+
+```bash
+npx tsx --test --test-name-pattern "interactive" tests/agent-sampling-loop.test.ts
+```
+
+The measured output is `✔ resumes the loop after an interactive approval is
+granted` and `✔ resumes the loop with a recoverable error after an
+interactive denial`. The API boundary can also be verified without a key:
+with the dev server running, `curl "http://localhost:3102/api/agent/approvals?runId=demo"`
+returns `{"ok":true,"pending":[]}`, and posting a decision for a pending
+approval that does not exist returns 404 with `"No pending approval found for
+run demo-run and tool call demo-call. It may have already been resolved or
+timed out."`.

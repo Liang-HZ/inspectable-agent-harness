@@ -165,3 +165,35 @@ Sandbox 很重要，但“sandbox”本身分层。项目现在已经有 pre-exe
 ## 本章小结
 
 当前项目已经具备真正 agent harness 的基础：模型循环、流式输出、真实只读工具、editing tools v1、provider dialect、session 记录和 debug surface。下一步应该继续沿着同一原则推进：先定义边界，再实现能力，再用测试和教程固定下来。
+
+## 本章验证点
+
+本章列出的"现在真实存在什么"可以用两条不需要 key 的命令交叉核对。第一条是全量测试——上面每一项能力都有对应用例在这 103 个里：
+
+```bash
+npm test
+```
+
+实测尾部输出：
+
+```text
+ℹ tests 103
+ℹ pass 103
+ℹ fail 0
+```
+
+第二条是演化轨迹本身——本章描述的每个"已经实现"都能在提交历史里找到对应落点：
+
+```bash
+git log --oneline
+```
+
+实测头部输出（截取）：
+
+```text
+0581dbf shell 安全收紧:safe 分类加参数级筛查,子进程 env 白名单,workdir realpath 校验
+551ce08 新增 context compaction:token 阈值触发历史压缩,复用 model gateway 生成摘要
+727f7a6 新增 session replay/resume:sessionId 解耦 session 身份与 run 身份,支持多轮对话续接
+```
+
+如果测试数量或提交内容和你手上的检出对不上，说明代码已经继续演化——以代码为准，这一章描述的是它写下时的边界。

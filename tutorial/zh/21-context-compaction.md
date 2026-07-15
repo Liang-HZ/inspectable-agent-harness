@@ -126,3 +126,31 @@ JSONL 文件本身不需要任何改动：它保持 append-only，不缩水，�
 ## 本章小结
 
 Context compaction 的核心工作不是"写一个通用摘要引擎"，而是三个边界判断：什么时候触发(有真实 usage 数据且过了阈值)、压缩之后留下什么(system + summary + 预算内的近期 user 消息，其余全部吸收进摘要)、以及在哪个安全点触发(两轮之间，永远不撕裂进行中的工具调用)。这三处判断做对了，配对不变量和持久化正确性几乎是自动满足的。
+
+## 本章验证点
+
+压缩的纯函数层、循环集成和 resume 重放各有点名的用例，全部不需要 key。先跑纯函数层：
+
+```bash
+npx tsx --test tests/agent-compaction.test.ts
+```
+
+实测尾部输出：
+
+```text
+✔ applyAgentHistoryCompaction keeps the leading system message and the summary (0.416209ms)
+✔ applyAgentHistoryCompaction never leaves an orphan function_call behind (0.078083ms)
+✔ applyAgentHistoryCompaction always keeps the most recent user message even if it alone exceeds the budget (0.085292ms)
+ℹ tests 11
+ℹ pass 11
+ℹ fail 0
+```
+
+再点名跑两条边界用例——循环内触发压缩后下一轮真的看到压缩后的历史，以及本章"Compaction 与 Resume 的交互"一节修掉的那个 bug 的回归测试：
+
+```bash
+npx tsx --test --test-name-pattern "compacts history" tests/agent-sampling-loop.test.ts
+npx tsx --test --test-name-pattern "replays compaction" tests/agent-session-store.test.ts
+```
+
+实测输出分别是 `✔ compacts history once reported usage crosses the threshold, and the next round sees the compacted history` 和 `✔ resumeAgentSession replays compaction instead of returning the uncompacted transcript`——后者就是"压缩过的 session 续接时旧历史不会复活"的证明。

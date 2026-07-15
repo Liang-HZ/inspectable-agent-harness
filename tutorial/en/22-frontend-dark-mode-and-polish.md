@@ -297,3 +297,28 @@ purposes. Tooling can finish 90% of the conversion, but the last 10% — also
 the part most likely to produce a bug a user directly runs into, like
 invisible text — has to be verified by looking at real, rendered pages, not
 by trusting that the diff looks correct.
+
+## Chapter Checkpoint
+
+This chapter's capability is pure frontend, so verification is UI steps and
+needs no key (opening pages needs no model; only running tasks does):
+
+1. Start the dev server (`npx next dev -p 3102`) and open
+   `http://localhost:3102` in a browser.
+2. Toggle the system appearance: on macOS, System Settings → Appearance; or
+   emulate it in browser DevTools — Chrome's Rendering panel can force
+   `prefers-color-scheme` to `dark`. The page should switch wholesale
+   without a reload.
+3. In dark mode, focus on the spots this chapter fixed: page titles and card
+   headers must stay readable (no "white text on a light background");
+   primary buttons (Send, Approve) must keep text/background contrast; Chat
+   mode must not show the Sessions rail.
+4. Enable "reduce motion" in system settings (macOS: Accessibility →
+   Display) and confirm the Running badge's shimmer stops — that is the
+   `prefers-reduced-motion` guard working.
+
+Expected outcome: in both appearances all text is readable, background
+layers are distinct, and the danger/warning/success color trios stay
+distinguishable. If some corner is still light — it is probably one of the
+~145 low-frequency decorative colors declared in "What Is Not Done", a
+stated boundary rather than a regression.

@@ -191,3 +191,26 @@ stderr:
 ## 本章小结
 
 shell 能力的核心不是 `spawn`，而是三个边界的叠加：参数感知的 safe-command 分类器、deny 不可推翻的 permission 合成规则、以及 timeout/截断/kill 的资源边界。这三层让"给模型一个 shell"从鲁莽变成可审计。
+
+## 本章验证点
+
+本章修过的每个安全洞都留下了点名的测试用例，不需要 key 就能全部实跑：
+
+```bash
+npx tsx --test tests/agent-shell-builtins.test.ts
+```
+
+实测输出（截取安全相关用例和尾部统计）：
+
+```text
+✔ classifier flags safe-listed commands whose arguments escape the project or can write/execute (0.245667ms)
+✔ shell rejects safe-listed commands with project-escaping arguments in read-only runs (0.501959ms)
+✔ shell child process does not inherit harness secrets (6.399167ms)
+✔ shell rejects a workdir symlink whose real directory is outside the project (1.300791ms)
+✔ shell kills the command after the per-call timeout (1005.783917ms)
+ℹ tests 17
+ℹ pass 17
+ℹ fail 0
+```
+
+对照本章"为什么分类器不是安全边界"一节读这份清单：第一条覆盖 `cat /etc/passwd`、`sort -o` 这类白名单命令带危险参数的降级；第三条证明被批准的 `printenv` 也拿不到 `OPENAI_API_KEY`（子进程 env 是白名单构造的）；第四条证明字面上在项目内的 workdir 符号链接会被 realpath 复查挡住。整个文件跑完约 1.2 秒——其中 1 秒来自真实的 timeout kill 用例。

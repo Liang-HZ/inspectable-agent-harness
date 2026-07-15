@@ -149,3 +149,33 @@ This chapter establishes the long-term tool registration and adaptation
 boundary: tools belong to the agent contract first, then provider dialects
 compile them into external schemas. The toy tool is removed and real built-ins
 become the default capability.
+
+## Chapter Checkpoint
+
+Every facet of the tool contract — group composition, runtime metadata, the
+provider-visible surface, and path policy — has a matching case, no key
+needed:
+
+```bash
+npx tsx --test tests/agent-tool-contracts.test.ts
+```
+
+Measured output:
+
+```text
+✔ tool groups expose current builtin surface (0.729666ms)
+✔ current tool definitions declare runtime metadata explicitly (0.151791ms)
+✔ provider-visible tools do not include runtime metadata (0.088917ms)
+✔ provider-visible editing tools depend on run sandbox mode (0.073125ms)
+✔ path access policies enforce current project and allowed roots (0.436ms)
+✔ relative path resolution follows the active path policy base (0.142541ms)
+ℹ tests 6
+ℹ pass 6
+ℹ fail 0
+```
+
+Note the third and fourth cases: they pin down "runtime facts like
+annotations, group, and timeout never leak into the provider schema" and
+"whether editing tools are exposed depends on the sandbox mode". That is the
+contract boundary this chapter is about — tools belong to the agent contract
+first, and providers only receive the compiled wire representation.

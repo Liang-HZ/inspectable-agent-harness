@@ -112,3 +112,22 @@ Unlimited 只是不设人为轮数上限。Runtime 仍然有 abort、fatal error
 ## 本章小结
 
 这一章把 agent loop 从教学限制推进到更真实的运行方式：不再用固定轮数截断任务，而是用语义化停止条件和重复调用 guard 控制失控循环。
+
+## 本章验证点
+
+repeated-call guard 有一条可以单独点名运行的用例，不需要 key：
+
+```bash
+npx tsx --test --test-name-pattern "repeated" tests/agent-sampling-loop.test.ts
+```
+
+实测输出：
+
+```text
+✔ stops repeated identical tool-call loops without a global round limit (10.282708ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+```
+
+用例名本身就是本章的设计声明：没有全局轮数上限（同文件里的 `allows more than five tool rounds before the final response` 证明超过五轮可以正常完成），但同名、同参数、同输出的重复调用会以 `REPEATED_TOOL_CALL` 停止，且最后一次 tool output 在 fatal stop 之前仍然被提交进 history。

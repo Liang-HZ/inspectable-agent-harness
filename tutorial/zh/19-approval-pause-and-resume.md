@@ -234,3 +234,30 @@ Approval resume 的核心不是新增一个状态机，而是把"等待用户"�
 `await` 它。pending 状态活在内存里而不是磁盘上，这是从 Codex 和 Claude Code
 的实现里学到的，也是这个边界目前应该停在哪里的判断——持久化 pending state 是
 一个更大的能力(它牵涉进程重启语义)，留给需要它的时候再做。
+
+## 本章验证点
+
+Approval 的模块行为和循环集成各有一组不需要 key 的测试。先跑模块层：
+
+```bash
+npx tsx --test tests/agent-approvals.test.ts
+```
+
+实测尾部输出：
+
+```text
+✔ interactive tool runtime executes the tool after approval (0.750166ms)
+✔ interactive tool runtime returns a recoverable error after denial (0.245958ms)
+✔ interactive tool runtime denies when the run aborts while waiting for approval (0.169791ms)
+ℹ tests 9
+ℹ pass 9
+ℹ fail 0
+```
+
+再点名跑两条采样循环集成用例——批准后继续、拒绝后带 recoverable error 继续：
+
+```bash
+npx tsx --test --test-name-pattern "interactive" tests/agent-sampling-loop.test.ts
+```
+
+实测输出是 `✔ resumes the loop after an interactive approval is granted` 和 `✔ resumes the loop with a recoverable error after an interactive denial`。另外可以不带 key 验证 API 边界：启动 dev server 后 `curl "http://localhost:3102/api/agent/approvals?runId=demo"` 返回 `{"ok":true,"pending":[]}`，对不存在的 pending 提交决策则返回 404 和 `"No pending approval found for run demo-run and tool call demo-call. It may have already been resolved or timed out."`。

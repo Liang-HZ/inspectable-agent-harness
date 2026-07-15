@@ -127,3 +127,26 @@ result before the runtime reports fatal stop.
 This chapter moves the agent loop beyond a teaching limit: tasks are no longer
 cut off by a fixed round count, while semantic stop conditions and repeated-call
 guards still control runaway loops.
+
+## Chapter Checkpoint
+
+The repeated-call guard has one case that can be run by name, no key needed:
+
+```bash
+npx tsx --test --test-name-pattern "repeated" tests/agent-sampling-loop.test.ts
+```
+
+Measured output:
+
+```text
+✔ stops repeated identical tool-call loops without a global round limit (10.282708ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+```
+
+The case name is itself this chapter's design statement: there is no global
+round cap (`allows more than five tool rounds before the final response` in
+the same file proves runs can go past five rounds), but a repeated call with
+the same name, arguments, and output stops with `REPEATED_TOOL_CALL`, and the
+final tool output is still committed to history before the fatal stop.

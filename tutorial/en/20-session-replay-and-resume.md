@@ -248,3 +248,35 @@ identity from run identity, reconstruction from appending, and "the full
 history sent to the model" from "only new content written to disk." Those
 three separations turn "continue a conversation" from a concept into a real
 capability that a single button click can trigger.
+
+## Chapter Checkpoint
+
+Both layers of resume — the session store's rebuild/normalize and
+`initializeAgentSessionForStream`'s append boundary — run in one key-free
+command:
+
+```bash
+npx tsx --test tests/agent-session-resume-init.test.ts tests/agent-session-store.test.ts
+```
+
+Measured output (key cases and the tail stats):
+
+```text
+✔ resuming appends only the new user turn to the reconstructed history (3.291208ms)
+✔ resuming a session interrupted mid-tool-call persists the synthesized output (1.182166ms)
+✔ resuming an unknown sessionId throws a descriptive error (0.440667ms)
+✔ normalizeAgentResponseItemHistory synthesizes output for an orphan function_call (0.17825ms)
+✔ resumeAgentSession normalizes a session interrupted mid-tool-call (0.898292ms)
+ℹ tests 12
+ℹ pass 12
+ℹ fail 0
+```
+
+These five map to the chapter's claims: only new content is appended, the
+history is never rewritten; an orphan `function_call` left by a mid-turn
+interruption gets a synthesized output that is also persisted; an unknown
+`sessionId` throws instead of silently starting a new session. Seeing real
+multi-turn behavior requires `.env.local` configured per chapter 0: run one
+task, click Continue this session in the Session panel, run another, and
+confirm the `model_requested` messages array on the Debug page contains both
+turns' user messages and the JSONL record count grows instead of doubling.

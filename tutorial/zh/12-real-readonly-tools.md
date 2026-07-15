@@ -123,3 +123,25 @@ Shell 很灵活，但也更难控权限、截断、输出格式和安全策略�
 ## 本章小结
 
 这一章把 agent 从 toy tool 推向真实文件探索：专用只读工具提供可控能力，path policy 管理访问范围，输出格式兼顾模型可读和 debug 可查。
+
+## 本章验证点
+
+四个只读工具的行为全部有测试锁定，不需要 key 就能实跑：
+
+```bash
+npx tsx --test tests/agent-builtins.test.ts
+```
+
+实测尾部输出：
+
+```text
+✔ grep returns structured matches from ripgrep (31.4035ms)
+✔ find returns matching project file paths (9.157917ms)
+✔ ls returns directory entries with deterministic order (0.746417ms)
+✔ tool runtime converts timeout into model-visible text output (12.34925ms)
+ℹ tests 22
+ℹ pass 22
+ℹ fail 0
+```
+
+22 个用例覆盖本章的全部主张：`grep` 真的在调用本机 ripgrep（不是 mock），路径逃逸在 path policy 层被拒绝并以模型可见错误返回，`read` 截断时带 pagination notice，timeout 和 abort 都被转换成模型可见文本而不是 runtime 崩溃。

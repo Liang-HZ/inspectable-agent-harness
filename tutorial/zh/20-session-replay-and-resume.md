@@ -150,3 +150,26 @@ Sidebar 的 "Current run" 卡片也加了一行 `continuing session ...` 标记�
 ## 本章小结
 
 Session resume 的核心不是新写一个持久化系统——第 7 章的 JSONL store 已经足够。真正的工作是三件事：把 session 身份和 run 身份分开、把"重建"和"追加"分开、把"完整发给模型"和"只写新内容到磁盘"分开。这三处分离让"继续一个对话"从概念变成了可以点一下按钮就触发的真实能力。
+
+## 本章验证点
+
+Resume 的两层——session store 的重建/normalize 和 `initializeAgentSessionForStream` 的追加边界——可以一条命令跑完，不需要 key：
+
+```bash
+npx tsx --test tests/agent-session-resume-init.test.ts tests/agent-session-store.test.ts
+```
+
+实测输出（截取关键用例和尾部统计）：
+
+```text
+✔ resuming appends only the new user turn to the reconstructed history (3.291208ms)
+✔ resuming a session interrupted mid-tool-call persists the synthesized output (1.182166ms)
+✔ resuming an unknown sessionId throws a descriptive error (0.440667ms)
+✔ normalizeAgentResponseItemHistory synthesizes output for an orphan function_call (0.17825ms)
+✔ resumeAgentSession normalizes a session interrupted mid-tool-call (0.898292ms)
+ℹ tests 12
+ℹ pass 12
+ℹ fail 0
+```
+
+这五条对应本章的四个主张：只追加新内容而不重写历史、mid-turn 中断留下的孤儿 function_call 被合成 output 补齐且落盘、未知 sessionId 抛错而不是静默新建。要看真实多轮行为则需要先按第 0 章配好 `.env.local`：跑一轮任务，在 Session 面板点 Continue this session 再跑一轮，确认 Debug 页 `model_requested` 里的 messages 数组包含两轮的 user 消息，且 JSONL 记录数是增长而不是翻倍。

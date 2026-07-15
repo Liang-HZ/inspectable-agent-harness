@@ -141,3 +141,29 @@ Strict schema 会影响工具参数怎么声明。内部契约必须能表达 op
 ## 本章小结
 
 这一章把 tool output 分成两层：模型可见文本和 runtime/debug metadata。它同时修正了 timeout、abort、错误序列化和 OpenAI strict schema 的边界。
+
+## 本章验证点
+
+Strict schema 的编译规则和 runtime 对 `null` 的接受，各有一条不需要 key 的验证路径：
+
+```bash
+npx tsx --test tests/openai-tool-schema.test.ts
+```
+
+实测输出：
+
+```text
+✔ OpenAI strict tool schema marks every property as required (0.853791ms)
+✔ OpenAI strict tool schema represents optional properties with null type (0.106375ms)
+ℹ tests 2
+ℹ pass 2
+ℹ fail 0
+```
+
+这两个用例锁定本章的修复边界：optional 参数被编译成 required + nullable，而不是从 `required` 里省略。再验证 runtime 这一侧真的接受 strict-mode 传来的 `null`：
+
+```bash
+npx tsx --test --test-name-pattern "strict" tests/agent-builtins.test.ts
+```
+
+实测输出是 `✔ read accepts OpenAI strict-mode null optional arguments`——wire schema 和 Zod parser 两侧的契约都被测试钉住了。

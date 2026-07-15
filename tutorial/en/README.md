@@ -36,6 +36,7 @@ Chinese mirror: [../zh/README.md](../zh/README.md)
 | [20](20-session-replay-and-resume.md) | Session replay and resume | Turn a single-turn JSONL session into a real multi-turn conversation that can be continued. |
 | [21](21-context-compaction.md) | Context compaction | Compact history automatically once a token threshold is reached, so long conversations don't grow without bound. |
 | [22](22-frontend-dark-mode-and-polish.md) | Frontend dark mode and polish | Add system-level dark mode and verify the Agent/Chat workbench page by page. |
+| [23](23-production-harness-gap-map.md) | The gap map to production harnesses | Draw the book's boundary proactively: against Codex/Claude Code, list the missing mechanisms, why they were skipped, and when they become worth building. |
 
 Beyond the chapter table there is an
 [appendix of prerequisite bridges](appendix-prerequisites.md) for readers

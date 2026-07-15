@@ -135,3 +135,22 @@ Agent 页面面向最终用户，应展示自然过程：模型输出、工具�
 ## 本章小结
 
 这一章把前端观察面分层：Agent 页面讲用户可见故事，Debug Console 看 runtime 细节，Session Viewer 看持久 JSONL 记录。
+
+## 本章验证点
+
+第一项不需要 key。启动 dev server（`npx next dev -p 3102`），然后向 Session 读取接口请求一个不存在的 id：
+
+```bash
+curl -i http://localhost:3102/api/agent/sessions/does-not-exist
+```
+
+实测响应（截取状态行和 body）：
+
+```text
+HTTP/1.1 404 Not Found
+{"ok":false,"error":"Agent session was not found."}
+```
+
+`GET /api/agent/sessions` 在全新检出、还没有任何 run 时返回 `{"ok":true,"sessions":[]}`。Session Viewer 页面消费的就是这两个接口——先列出，再按 id 加载原始记录。
+
+第二项需要先按第 0 章配好 `.env.local`：在 Agent 页面跑一个会用到 `ls/grep/read` 的任务，然后依次检查三个视图——Agent 页是干净的 transcript（没有 "round" 字样），Debug 页有 model input/output、tool details 和 permission audit，Session 页能列出刚才的 run 并展开逐行 JSONL 记录。

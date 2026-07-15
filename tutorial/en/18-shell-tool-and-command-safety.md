@@ -311,3 +311,33 @@ three boundaries: an argument-aware safe-command classifier, a permission
 composition rule where deny is final, and resource boundaries of
 timeout/truncation/kill. Together they turn "give the model a shell" from
 reckless into auditable.
+
+## Chapter Checkpoint
+
+Every security hole fixed in this chapter left behind a named test case, and
+the whole file runs without a key:
+
+```bash
+npx tsx --test tests/agent-shell-builtins.test.ts
+```
+
+Measured output (security-relevant cases and the tail stats):
+
+```text
+✔ classifier flags safe-listed commands whose arguments escape the project or can write/execute (0.245667ms)
+✔ shell rejects safe-listed commands with project-escaping arguments in read-only runs (0.501959ms)
+✔ shell child process does not inherit harness secrets (6.399167ms)
+✔ shell rejects a workdir symlink whose real directory is outside the project (1.300791ms)
+✔ shell kills the command after the per-call timeout (1005.783917ms)
+ℹ tests 17
+ℹ pass 17
+ℹ fail 0
+```
+
+Read this list against the "why the classifier is not a security boundary"
+section: the first case covers the downgrades for safe-listed commands with
+dangerous arguments (`cat /etc/passwd`, `sort -o`); the third proves that
+even an approved `printenv` cannot see `OPENAI_API_KEY` (the child env is
+allowlist-built); the fourth proves a workdir symlink that is lexically
+inside the project is caught by the realpath re-check. The whole file takes
+about 1.2 seconds — one of those seconds is the real timeout-kill case.

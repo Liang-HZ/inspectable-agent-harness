@@ -156,3 +156,34 @@ nullable fields.
 This chapter splits tool output into model-visible text and runtime/debug
 metadata. It also fixes timeout, abort, error serialization, and OpenAI strict
 schema boundaries.
+
+## Chapter Checkpoint
+
+The strict-schema compilation rule and the runtime's acceptance of `null`
+each have a key-free verification path:
+
+```bash
+npx tsx --test tests/openai-tool-schema.test.ts
+```
+
+Measured output:
+
+```text
+✔ OpenAI strict tool schema marks every property as required (0.853791ms)
+✔ OpenAI strict tool schema represents optional properties with null type (0.106375ms)
+ℹ tests 2
+ℹ pass 2
+ℹ fail 0
+```
+
+These two cases pin the fix boundary of this chapter: optional parameters are
+compiled into required + nullable, not omitted from `required`. Then verify
+that the runtime side really accepts strict-mode `null`:
+
+```bash
+npx tsx --test --test-name-pattern "strict" tests/agent-builtins.test.ts
+```
+
+The measured output is `✔ read accepts OpenAI strict-mode null optional
+arguments` — both sides of the contract, wire schema and Zod parser, are
+nailed down by tests.

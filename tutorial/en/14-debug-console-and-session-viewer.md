@@ -154,3 +154,29 @@ reading flow while keeping details available.
 This chapter separates frontend observation surfaces: the Agent page tells the
 end-user story, the Debug Console inspects runtime details, and the Session
 Viewer shows durable JSONL records.
+
+## Chapter Checkpoint
+
+The first item needs no key. Start the dev server (`npx next dev -p 3102`),
+then ask the session read API for an id that does not exist:
+
+```bash
+curl -i http://localhost:3102/api/agent/sessions/does-not-exist
+```
+
+Measured response (status line and body):
+
+```text
+HTTP/1.1 404 Not Found
+{"ok":false,"error":"Agent session was not found."}
+```
+
+`GET /api/agent/sessions` returns `{"ok":true,"sessions":[]}` on a fresh
+checkout with no runs yet. These two endpoints are exactly what the Session
+Viewer consumes — list first, then load raw records by id.
+
+The second item requires `.env.local` configured per chapter 0: run an Agent
+task that uses `ls/grep/read`, then walk the three views — the Agent page is
+a clean transcript (no "round" labels), the Debug page shows model
+input/output, tool details, and the permission audit, and the Session page
+lists the run and expands its line-by-line JSONL records.

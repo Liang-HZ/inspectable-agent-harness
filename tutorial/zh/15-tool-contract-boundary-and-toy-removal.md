@@ -135,3 +135,27 @@ Provider schema 是 wire representation。Agent 自己的工具契约才是 runt
 ## 本章小结
 
 这一章建立了工具注册和适配的长期边界：工具先属于 agent contract，再由 provider dialect 编译成外部 schema。Toy tool 被移除，真实 built-in 工具成为默认能力。
+
+## 本章验证点
+
+Tool contract 的每个断面——group 组合、runtime metadata、provider 可见面、path policy——都有对应用例，不需要 key：
+
+```bash
+npx tsx --test tests/agent-tool-contracts.test.ts
+```
+
+实测输出：
+
+```text
+✔ tool groups expose current builtin surface (0.729666ms)
+✔ current tool definitions declare runtime metadata explicitly (0.151791ms)
+✔ provider-visible tools do not include runtime metadata (0.088917ms)
+✔ provider-visible editing tools depend on run sandbox mode (0.073125ms)
+✔ path access policies enforce current project and allowed roots (0.436ms)
+✔ relative path resolution follows the active path policy base (0.142541ms)
+ℹ tests 6
+ℹ pass 6
+ℹ fail 0
+```
+
+留意第三条和第四条：它们分别锁定"annotations、group、timeout 这些 runtime facts 不会泄漏进 provider schema"和"editing 工具是否暴露取决于 sandbox mode"。这正是本章说的契约边界——工具先属于 agent contract，provider 只拿到编译后的 wire 表示。

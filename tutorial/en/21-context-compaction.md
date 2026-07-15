@@ -271,3 +271,38 @@ summary + budgeted recent user messages, everything else absorbed into the
 summary), and at which safe point to trigger (between rounds, never tearing
 apart an in-flight tool call). Get those three decisions right, and the
 pairing invariant and persistence correctness follow almost for free.
+
+## Chapter Checkpoint
+
+The pure-function layer, the loop integration, and the resume replay each
+have named cases, all key-free. Run the pure-function layer first:
+
+```bash
+npx tsx --test tests/agent-compaction.test.ts
+```
+
+Measured tail output:
+
+```text
+✔ applyAgentHistoryCompaction keeps the leading system message and the summary (0.416209ms)
+✔ applyAgentHistoryCompaction never leaves an orphan function_call behind (0.078083ms)
+✔ applyAgentHistoryCompaction always keeps the most recent user message even if it alone exceeds the budget (0.085292ms)
+ℹ tests 11
+ℹ pass 11
+ℹ fail 0
+```
+
+Then run two boundary cases by name — the next round after an in-loop
+compaction really sees the compacted history, and the regression test for
+the bug fixed in "Compaction Meets Resume":
+
+```bash
+npx tsx --test --test-name-pattern "compacts history" tests/agent-sampling-loop.test.ts
+npx tsx --test --test-name-pattern "replays compaction" tests/agent-session-store.test.ts
+```
+
+The measured outputs are `✔ compacts history once reported usage crosses the
+threshold, and the next round sees the compacted history` and
+`✔ resumeAgentSession replays compaction instead of returning the uncompacted
+transcript` — the latter is the proof that resuming a compacted session does
+not resurrect the discarded history.

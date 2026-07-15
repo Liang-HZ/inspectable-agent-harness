@@ -197,3 +197,40 @@ streaming, real read-only tools, editing tools v1, provider dialects, session
 records, and debug surfaces. Future work should follow the same rule: define
 the boundary, implement the capability, then lock it down with tests and
 tutorial updates.
+
+## Chapter Checkpoint
+
+The "what exists now" list in this chapter can be cross-checked with two
+key-free commands. The first is the full suite — every capability above has
+corresponding cases among these 103:
+
+```bash
+npm test
+```
+
+Measured tail output:
+
+```text
+ℹ tests 103
+ℹ pass 103
+ℹ fail 0
+```
+
+The second is the evolution trail itself — every "already implemented" item
+in this chapter has a matching landing point in the commit history:
+
+```bash
+git log --oneline
+```
+
+Measured head output (excerpt; commit subjects are in Chinese):
+
+```text
+0581dbf shell 安全收紧:safe 分类加参数级筛查,子进程 env 白名单,workdir realpath 校验
+551ce08 新增 context compaction:token 阈值触发历史压缩,复用 model gateway 生成摘要
+727f7a6 新增 session replay/resume:sessionId 解耦 session 身份与 run 身份,支持多轮对话续接
+```
+
+If the test count or the commits do not match your checkout, the code has
+kept evolving — trust the code; this chapter describes the boundary as of
+the time it was written.

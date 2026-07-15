@@ -138,3 +138,30 @@ truncated, provide actionable continuation hints.
 This chapter moves the agent from toy tools to real file exploration: dedicated
 read-only tools provide controlled capability, path policy manages access, and
 output formatting serves both model readability and debug inspection.
+
+## Chapter Checkpoint
+
+Every behavior of the four read-only tools is pinned by tests, and none of
+them needs a key:
+
+```bash
+npx tsx --test tests/agent-builtins.test.ts
+```
+
+Measured tail output:
+
+```text
+✔ grep returns structured matches from ripgrep (31.4035ms)
+✔ find returns matching project file paths (9.157917ms)
+✔ ls returns directory entries with deterministic order (0.746417ms)
+✔ tool runtime converts timeout into model-visible text output (12.34925ms)
+ℹ tests 22
+ℹ pass 22
+ℹ fail 0
+```
+
+The 22 cases cover every claim in this chapter: `grep` really invokes the
+local ripgrep binary (no mock), path escapes are rejected at the path-policy
+layer and returned as model-visible errors, `read` truncation carries a
+pagination notice, and timeout and abort become model-visible text instead of
+runtime crashes.
