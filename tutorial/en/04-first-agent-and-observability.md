@@ -141,6 +141,10 @@ A successful response carries the final answer plus inspectable steps:
 }
 ```
 
+(This is the response shape as it was at this point: `usage` was still null.
+Chapter 7 introduces usage normalization, after which it becomes a structured
+object — see this chapter's checkpoint for the current shape.)
+
 Later chapters add deterministic tests that prove the runtime without real
 provider calls.
 

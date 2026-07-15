@@ -107,6 +107,7 @@ lib/agent-session-store.ts          JSONL session rollout writer and reader
 lib/agent-log.ts                    Structured server log helpers for agent runs
 lib/agent-tool-contracts.ts         Provider-neutral tool definition and grouping contract
 lib/agent-path-policy.ts            Tool path-access policy helpers
+lib/agent-tool-output.ts            Structured tool output variants and model-facing serialization
 lib/agent-tool-runtime.ts           Agent tool execution lifecycle boundary
 lib/agent-tools.ts                  Agent tool groups and registry
 lib/agent-builtins.ts               Built-in read-only local file tools

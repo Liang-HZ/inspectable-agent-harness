@@ -76,7 +76,8 @@ curl -X POST http://localhost:3000/api/agent \
   }'
 ```
 
-The first agent response includes the final answer plus inspectable steps:
+The agent response includes the final answer, inspectable steps, and
+normalized token usage:
 
 ```json
 {
@@ -91,7 +92,11 @@ The first agent response includes the final answer plus inspectable steps:
         "detail": "..."
       }
     ],
-    "usage": null
+    "usage": {
+      "totalTokenUsage": { "inputTokens": 0, "outputTokens": 0, "...": "..." },
+      "lastTokenUsage": null,
+      "calls": []
+    }
   }
 }
 ```

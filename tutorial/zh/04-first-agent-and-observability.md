@@ -130,6 +130,8 @@ npm run build
 }
 ```
 
+（这是当时的响应形态：`usage` 还是 null。第 7 章引入 usage 归一化之后，它变成结构化对象——现行形态见本章末尾的验证点。）
+
 后面的章节会加入 deterministic tests，不靠真实 provider 也能证明 runtime。
 
 ## 常见误解
