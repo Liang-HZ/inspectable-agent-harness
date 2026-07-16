@@ -17,6 +17,12 @@ import type {
   ModelProviderDialect,
   ModelRequestOptions,
 } from './model-provider-dialect';
+import {
+  DEFAULT_MODEL_RETRY_POLICY,
+  runWithModelRetry,
+  type ModelRetryPolicy,
+} from './model-retry';
+import { logAgentInfo } from './agent-log';
 
 export type AgentModelGateway = {
   model: string;
@@ -55,9 +61,23 @@ async function* guardStreamCancellation(
 export function createAgentModelGateway(
   config: ModelConfig,
   context: AgentRunContext,
+  retryPolicy: ModelRetryPolicy = DEFAULT_MODEL_RETRY_POLICY,
 ): AgentModelGateway {
   const client = createOpenAICompatibleClient(config);
   const dialect = selectDialect(config.wireApi);
+
+  function withRetry<T>(operation: () => Promise<T>): Promise<T> {
+    return runWithModelRetry(operation, retryPolicy, {
+      signal: context.signal,
+      onRetry: ({ attempt, delayMs, error }) => {
+        logAgentInfo(context.runId, 'model_call_retry', {
+          attempt: attempt,
+          delayMs: delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
+  }
 
   return {
     model: config.model,
@@ -68,11 +88,13 @@ export function createAgentModelGateway(
       request: AgentModelRequest,
     ): Promise<AgentModelResponse> {
       assertAgentRunNotAborted(context);
-      const response = await dialect.createResponse(
-        client,
-        config,
-        request,
-        sdkRequestOptions(context),
+      const response = await withRetry(() =>
+        dialect.createResponse(
+          client,
+          config,
+          request,
+          sdkRequestOptions(context),
+        ),
       );
       assertAgentRunNotAborted(context);
 
@@ -83,11 +105,17 @@ export function createAgentModelGateway(
       request: AgentModelRequest,
     ): Promise<AsyncIterable<AgentModelStreamEvent>> {
       assertAgentRunNotAborted(context);
-      const stream = await dialect.streamResponse(
-        client,
-        config,
-        request,
-        sdkRequestOptions(context),
+      // Retry only covers establishing the stream. Once events start flowing,
+      // the runtime may already have committed assistant text, so a mid-stream
+      // reconnect would double-emit; that failure surfaces as run_failed
+      // instead. This is the same boundary Codex draws around streamed turns.
+      const stream = await withRetry(() =>
+        dialect.streamResponse(
+          client,
+          config,
+          request,
+          sdkRequestOptions(context),
+        ),
       );
       assertAgentRunNotAborted(context);
 

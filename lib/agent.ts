@@ -55,6 +55,10 @@ import {
   decideAgentHistoryCompaction,
   DEFAULT_COMPACTION_TOKEN_THRESHOLD,
 } from './agent-compaction';
+import {
+  buildAgentSystemMessage,
+  gatherAgentEnvironmentContext,
+} from './agent-environment-context';
 
 type RunAgentStreamCallbacks = {
   onEvent: (event: AgentEvent) => void;
@@ -198,12 +202,15 @@ function createFinalAnswerStep(
   };
 }
 
-function createInitialResponseItems(prompt: string): AgentResponseItem[] {
+function createInitialResponseItems(
+  prompt: string,
+  systemMessage: string = AGENT_SYSTEM_MESSAGE,
+): AgentResponseItem[] {
   return [
     {
       type: 'message',
       role: 'system',
-      content: AGENT_SYSTEM_MESSAGE,
+      content: systemMessage,
     },
     {
       type: 'message',
@@ -226,6 +233,7 @@ export function initializeAgentSessionForStream(
   context: AgentRunContext,
   config: ModelConfig,
   prompt: string,
+  systemMessage?: string,
 ): AgentSessionInitResult {
   if (input.sessionId === undefined) {
     const session = createAgentSession({
@@ -238,7 +246,7 @@ export function initializeAgentSessionForStream(
       wireApi: config.wireApi,
       policy: context.policy,
     });
-    const history = createInitialResponseItems(prompt);
+    const history = createInitialResponseItems(prompt, systemMessage);
 
     return {
       session: session,
@@ -702,8 +710,12 @@ export async function runAgent(
   const context = createAgentRunContextForInput(input, contextInput);
   const modelGateway = createAgentModelGateway(config, context);
   const prompt = buildAgentPrompt(input);
+  const systemMessage = buildAgentSystemMessage(
+    AGENT_SYSTEM_MESSAGE,
+    await gatherAgentEnvironmentContext(),
+  );
   const steps: AgentStep[] = [];
-  const history = createInitialResponseItems(prompt);
+  const history = createInitialResponseItems(prompt, systemMessage);
   const modelCallUsages: AgentModelCallUsage[] = [];
 
   assertAgentRunNotAborted(context);
@@ -759,11 +771,22 @@ export async function runAgentStream(
   const context = createAgentRunContextForInput(input, contextInput);
   const modelGateway = createAgentModelGateway(config, context);
   const prompt = buildAgentPrompt(input);
+  // Environment context is captured once, at session start, and baked into the
+  // system message. A resumed session already carries its original system
+  // message in history, so this only applies to fresh sessions.
+  const systemMessage =
+    input.sessionId === undefined
+      ? buildAgentSystemMessage(
+          AGENT_SYSTEM_MESSAGE,
+          await gatherAgentEnvironmentContext(),
+        )
+      : undefined;
   const sessionInit = initializeAgentSessionForStream(
     input,
     context,
     config,
     prompt,
+    systemMessage,
   );
   const { session, history, sessionId, resumed } = sessionInit;
   appendAgentTurnContext(session, {
