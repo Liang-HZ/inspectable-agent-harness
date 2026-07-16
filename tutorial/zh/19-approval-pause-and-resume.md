@@ -69,7 +69,7 @@ run 被中止   { type: 'denied', source: 'abort', reason }
 
 ### 为什么注册用 `globalThis` 而不是模块级变量
 
-registry 用 `Symbol.for('myJsTest.agentApprovalRegistry')` 存在 `globalThis`
+registry 用 `Symbol.for('inspectableAgentHarness.agentApprovalRegistry')` 存在 `globalThis`
 上，而不是模块顶层的 `new Map()`。原因是 Next.js 在某些打包路径下会把同一个
 `.ts` 文件加载成多个模块实例(stream route 和 approvals route 可能各自持有一份
 "独立"的 `agent-approvals.ts`)。如果 registry 是模块级变量，两个路由各自看到

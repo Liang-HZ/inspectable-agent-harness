@@ -45,7 +45,7 @@ type ResolveAgentApprovalResult =
 // Claude Code, a dead server process means the approval is denied, and the
 // durable record lives in the session JSONL events instead.
 const AGENT_APPROVAL_REGISTRY_KEY = Symbol.for(
-  'myJsTest.agentApprovalRegistry',
+  'inspectableAgentHarness.agentApprovalRegistry',
 );
 
 function getAgentApprovalRegistry(): AgentApprovalRegistry {

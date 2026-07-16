@@ -81,7 +81,7 @@ the same recovery path; there is no reason to distinguish them.
 ### Why the registry lives on `globalThis`, not a module-level variable
 
 The registry is stashed on `globalThis` under
-`Symbol.for('myJsTest.agentApprovalRegistry')` instead of a top-level
+`Symbol.for('inspectableAgentHarness.agentApprovalRegistry')` instead of a top-level
 `new Map()`. The reason: Next.js can load the same `.ts` file as multiple
 module instances along certain bundling paths (the stream route and the
 approvals route may each end up with their own "separate" copy of

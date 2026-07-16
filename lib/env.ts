@@ -3,7 +3,7 @@ import * as z from 'zod';
 import { AGENT_MODEL_WIRE_APIS } from './agent-model-types';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
-const DEFAULT_MODEL = 'gpt-5.5';
+const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_WIRE_API = 'openai-chat-completions';
 const MISSING_API_KEY_ERROR =
   'Missing OPENAI_API_KEY in environment variables.';
