@@ -16,9 +16,9 @@
 | 机制 | 本项目现状 | 生产 harness 的做法 |
 | --- | --- | --- |
 | OS 级沙箱 | path policy + 词法级参数筛查，无内核强制 | Codex：macOS Seatbelt / Linux Landlock；Claude Code：sandbox 模式 |
-| 环境上下文注入 | system prompt 是写死常量，无 cwd/日期/目录摘要 | 自动注入环境块 + AGENTS.md / CLAUDE.md 项目记忆 |
-| 模型调用重试 | 429/5xx/断流直接 `run_failed` | 可重试错误分类 + 指数退避 |
-| Provider 覆盖 | 仅 OpenAI 两形态；capabilities 声明了但无人消费 | 多 provider dialect，Anthropic Messages 是真正试金石 |
+| 环境上下文注入 | **已补**：cwd/日期/git/目录/AGENTS.md 注入 system message | 自动注入环境块 + AGENTS.md / CLAUDE.md 项目记忆 |
+| 模型调用重试 | **已补**：可重试错误分类 + 指数退避（建流后不重试） | 可重试错误分类 + 指数退避 |
+| Provider 覆盖 | **部分已补**：Anthropic Messages 映射层已实现并测试，未接活客户端 | 多 provider dialect，Anthropic Messages 是真正试金石 |
 | MCP | source 枚举里的 `'mcp'` 是占位 | 完整 discovery/dispatch/lifecycle |
 | Subagent | 无 | Claude Code Task 工具派生子任务 |
 | Hooks 与持久规则 | decision source 里 `hook`/`guardian` 占位；每次 ask 单独批 | settings allowlist、"approved for session"、hook 链 |
@@ -26,7 +26,7 @@
 | Steering | 运行中无法注入新消息，取消是唯一干预 | 运行中排队/插入用户输入 |
 | 其他 | 阈值写死、无 microcompact/fork/durable approvals/SSE 重连 | 见下文杂项一节 |
 
-表格给的是索引，下面按主题展开。每条按同一结构：本项目现状 → 生产 harness 的做法 → 为什么这里不做、何时值得做。
+表格给的是索引，下面按主题展开。每条按同一结构：本项目现状 → 生产 harness 的做法 → 为什么这里不做、何时值得做。第 2、3、4 条标着"已补"——它们最初是本章列出的缺口，后来按本章末尾的推荐顺序补上了；这里保留它们，既记录了从"声明缺口"到"补齐"的完整路径，也说明本章的方法论确实在自我兑现。
 
 ## 1. OS 级沙箱
 
@@ -36,29 +36,29 @@
 
 **为什么不做**：OS 沙箱是平台相关的深水区（每个平台一套机制，且和教学主线无关），而"分类器省审批、permission 边界做决策、真正的执行强制缺位"这个结构本身就是要教的内容。什么时候值得做：当这个 harness 要在不受信任的输入上运行时——那一刻它就不再是可选项。
 
-## 2. Context 组装的另一半
+## 2. Context 组装的另一半（已补）
 
-**现状**：`lib/agent.ts` 的 `AGENT_SYSTEM_MESSAGE` 是一个写死的字符串常量；user prompt 由 `buildAgentPrompt` 拼 Task/Goal/Context 三段，其中 Context 是**用户手动传的**，不是 runtime 采集的。没有 cwd 注入、没有当前日期、没有目录结构摘要、没有 git 状态，也没有 AGENTS.md / CLAUDE.md 式的项目记忆机制——模型对"自己在哪"的全部认知来自工具调用的探索结果。
+**原缺口**：`lib/agent.ts` 的 `AGENT_SYSTEM_MESSAGE` 曾是一个写死的字符串常量，没有 cwd、日期、目录摘要、git 状态，也没有 AGENTS.md / CLAUDE.md 式的项目记忆——模型对"自己在哪"的全部认知只能来自工具探索。
 
-**生产做法**：Codex 和 Claude Code 都在每个 turn 自动组装环境块（cwd、日期、平台、目录概览、git 状态），并把项目根的 AGENTS.md / CLAUDE.md 内容作为持久指令注入。这是 harness 叙事里常被忽略的另一半：工具决定模型能**做**什么，context 组装决定模型**知道**什么。
+**生产做法**：Codex 和 Claude Code 都在会话开始时自动组装环境块（cwd、日期、平台、目录概览、git 状态），并把项目根的 AGENTS.md / CLAUDE.md 内容作为持久指令注入。这是 harness 叙事里常被忽略的另一半：工具决定模型能**做**什么，context 组装决定模型**知道**什么。
 
-**为什么不做**：不是难，是还没轮到——教程主线先补的是行为边界（shell/approval/resume/compaction）。这也是所有缺口里**最便宜能补**的一个：一个纯函数把环境事实拼进 system message，一组测试断言注入内容，一章教程。这就是为什么它排在推荐顺序第一位。
+**本项目怎么补的**：`lib/agent-environment-context.ts` 把这一层拆成两半——`gatherAgentEnvironmentContext`（读真实 fs/git，全部 best-effort，任何一项失败都降级为 `null` 而不是让 run 失败）与 `buildAgentSystemMessage`（纯函数，把环境事实拼成 `<environment_context>` / `<project_instructions>` 块）。它在新 session 启动时注入一次，baked 进第一条 system message；resume 的 session 已在 history 里带着原 system message，不重复注入。这正是"最便宜能补"的兑现：一个 gather/format 分离的模块、一组不碰 provider 的测试、一次注入点。
 
-## 3. 模型调用重试与退避
+## 3. 模型调用重试与退避（已补）
 
-**现状**：model gateway（`lib/model-gateway.ts`）没有任何重试逻辑。429、5xx、网络断流都会一路抛到采样循环，变成终态 `run_failed` 事件。终态事件本身是完备的（这是修过的地方——run 不会静默挂着），但恢复策略为零：一次瞬时抖动就终结整个 run。
+**原缺口**：model gateway 曾没有任何重试逻辑，429、5xx、网络断流都直接抛成终态 `run_failed`——终态事件是完备的（run 不会静默挂着），但恢复策略为零，一次瞬时抖动就终结整个 run。
 
 **生产做法**：生产 harness 把错误分成可重试（429、5xx、断流、超时）和不可重试（4xx 语义错误、鉴权失败），对前者做带抖动的指数退避，并把重试次数记进 telemetry。
 
-**为什么不做**：教学上"失败要可见"比"失败要自愈"优先——重试逻辑写早了会掩盖边界问题。但这个缺口在真实使用里最先疼：长对话跑到第十轮因为一次 429 全部作废，compaction 摘要调用失败整个 run 跟着失败（第 21 章已声明）。它排在推荐顺序第二位。
+**本项目怎么补的**：`lib/model-retry.ts` 的 `runWithModelRetry` 做 full-jitter 指数退避，`isRetryableModelError` 明确区分可重试（429/408/409/5xx、`ECONNRESET`/`APIConnectionError` 等传输错误）与不可重试（4xx、以及主动 abort——取消绝不重试）。gateway 里 `createResponse` 全程重试；`streamResponse` **只重试建流阶段**——一旦事件开始流出，runtime 可能已经提交了 assistant 文本，中途重连会重复发射，所以那种失败仍旧走 `run_failed`。这个边界本身就是有教学价值的部分：不是"到处加 try 重来"，而是想清楚"哪个阶段重试是安全的"。
 
-## 4. Provider 覆盖
+## 4. Provider 覆盖（映射层已补）
 
-**现状**：provider-neutral 的 `AgentResponseItem` IR 只被 OpenAI 的两种 wire 形态（Chat Completions、Responses）验证过。`AgentModelCapabilities`（tools/streaming/streamingUsage/parallelToolCalls）每个 dialect 都声明了，但**当前没有任何 runtime 代码读它**——声明了的契约无人消费，这是诚实的现状。
+**原缺口**：provider-neutral 的 IR 只被 OpenAI 的两种 wire 形态（Chat Completions、Responses）验证过，而这两者的消息模型高度同源，证明不了 IR 面对**结构不同**的协议能否活下来。
 
-**生产做法**：多 provider 支持不是加一个 baseURL，而是让 IR 经受结构不同的协议考验。Anthropic Messages API 是真正的试金石：content 是 block 数组而不是字符串、tool 结果作为 user 消息里的 `tool_result` block 回传、system 是顶层参数而不是 messages 里的一条。IR 里任何 OpenAI 形状的偷懒都会在这三处暴露。
+**生产做法**：多 provider 支持不是加一个 baseURL，而是让 IR 经受结构不同的协议考验。Anthropic Messages API 是真正的试金石，它在三个承重点上和 OpenAI 不同：content 是 block 数组（`text`/`tool_use`/`tool_result`）而不是字符串加一个平行的 `tool_calls`、tool 结果作为 user 消息里的 `tool_result` block 回传（不是独立的 tool role，所以连续的 tool 结果要合并进同一个 user turn）、system 是顶层参数而不是 messages 里的一条。IR 里任何 OpenAI 形状的偷懒都会在这三处暴露。
 
-**为什么不做**：两种 OpenAI 形态已经足够建立 dialect 边界的教学价值。但"provider-neutral"目前是一个未被第二方检验的主张——加 Anthropic dialect 是检验它的最短路径，排在推荐顺序第三位。
+**本项目怎么补的**：`lib/anthropic-messages-mapping.ts` 用纯函数实现了这三处映射并逐一写了测试——IR 完整地穿过了 Anthropic 的形状，这就是"provider-neutral"从主张变成被第二方检验过的事实。**但它刻意没有接活客户端**：`ModelProviderDialect` 契约目前 typed 到 OpenAI SDK client，加 `@anthropic-ai/sdk` 和一个新的 `OPENAI_WIRE_API` 枚举值是**管道工程，不是建模**——而检验 IR 中立性的价值全在建模那一半，接活客户端不产生额外证据（没有 Anthropic key 也跑不了）。诚实地画在这里：映射被证明了，接线留作机械的下一步，也正是 `capabilities` 声明终于会有第二个消费者的地方。
 
 ## 5. MCP
 
@@ -113,15 +113,15 @@
 
 ## 如果要继续加能力
 
-推荐顺序及理由：
+推荐顺序及理由（打勾的三项已按此顺序补上，见上文第 2、3、4 条）：
 
-1. **环境上下文注入**——最便宜、无风险、立刻提升每一次真实使用；纯函数 + 测试 + 一章教程的标准节奏。
-2. **模型调用重试**——真实使用里最先疼的缺口；错误分类本身是有教学价值的边界设计。
-3. **Anthropic dialect**——检验"provider-neutral"这个核心主张的最短路径；顺手让 capabilities 声明第一次被 runtime 消费。
+1. ✅ **环境上下文注入**——最便宜、无风险、立刻提升每一次真实使用；纯函数 + 测试 + 一章教程的标准节奏。
+2. ✅ **模型调用重试**——真实使用里最先疼的缺口；错误分类本身是有教学价值的边界设计。
+3. ✅ **Anthropic 映射层**——检验"provider-neutral"这个核心主张的最短路径。映射已实现并测试；接活客户端（`@anthropic-ai/sdk` + 新 wire-api 枚举 + `capabilities` 消费）是留下的机械尾巴。
 4. **OS 沙箱**——在前三项让 harness 值得日常使用之后，安全边界从教学声明升级为内核强制。
 5. **MCP**——工具生态的接入点，占位枚举兑现之时。
 
-顺序的逻辑：先补"让它好用"的（1、2），再补"检验核心主张"的（3），再补"让它可信"的（4），最后是"让它开放"的（5）。每一步都遵守第 17 章的纪律：定义边界、暴露数据流、写真实测试、更新教程。
+顺序的逻辑：先补"让它好用"的（1、2），再补"检验核心主张"的（3），再补"让它可信"的（4），最后是"让它开放"的（5）。每一步都遵守第 17 章的纪律：定义边界、暴露数据流、写真实测试、更新教程。前三步已经走完，正好演示了这套纪律在实践里长什么样。
 
 ## 本章小结
 

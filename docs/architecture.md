@@ -403,6 +403,23 @@ openai-chat-completions  lib/openai-chat-completions-dialect.ts
 openai-responses         lib/openai-responses-dialect.ts
 ```
 
+`lib/anthropic-messages-mapping.ts` proves the IR is genuinely
+provider-neutral against a differently-shaped provider. The two OpenAI
+dialects share a near-identical message model, so they cannot show whether the
+IR survives a different shape. Anthropic's Messages API differs in three
+load-bearing ways, each handled by pure, fully-tested mapping functions:
+`system` is a top-level request parameter (not a message role); content is an
+array of typed blocks (`text` / `tool_use` / `tool_result`, not a flat string
+plus a sibling `tool_calls` array); and a tool result is a `tool_result` block
+inside a *user* message (not a dedicated `tool` role, so consecutive tool
+results coalesce into one user turn). This module is intentionally not yet
+wired to a live client: `ModelProviderDialect` is currently typed to the
+OpenAI SDK client, and adding `@anthropic-ai/sdk` plus a new `OPENAI_WIRE_API`
+value is plumbing, not modeling. What the mapping establishes is that the IR is
+the correct waist for a second provider; wiring it is a mechanical next step
+and the point where the `capabilities` shape would finally gain a second
+consumer.
+
 Both dialects expose the same capabilities shape:
 
 ```ts
@@ -505,6 +522,29 @@ It creates the OpenAI SDK client, selects the configured dialect from
 `AbortSignal`, and exposes narrow provider-neutral `createResponse` and
 `streamResponse` methods. This module should remain a gateway and registry
 boundary. Protocol details belong in dialect files.
+
+The gateway wraps every model call in `lib/model-retry.ts`'s
+`runWithModelRetry`. The retry policy retries rate limits (429), request
+timeout/conflict (408/409), provider 5xx, and transport-level failures
+(`ECONNRESET`, `APIConnectionError`, ...) with exponential backoff plus full
+jitter; it never retries 4xx client errors (a bad key or malformed request
+fails identically on retry) or a deliberate run abort. `createResponse` is
+retried in full. `streamResponse` only retries establishing the stream: once
+events start flowing the runtime may already have committed assistant text, so
+a mid-stream reconnect would double-emit. Each retry emits a `model_call_retry`
+structured log line.
+
+`lib/agent-environment-context.ts` assembles the run's environment context.
+
+A harness assembles context, not just tool loops. At the start of a fresh
+session, `gatherAgentEnvironmentContext` reads (all best-effort, degrading to
+`null` on any failure) the cwd, current date, git branch and dirty-file
+summary, the top-level directory listing, and the project's `AGENTS.md` or
+`CLAUDE.md` instructions. `buildAgentSystemMessage` (a pure function) appends
+this as an `<environment_context>` / `<project_instructions>` block to the base
+system message, which is then baked into the session's first system message.
+A resumed session already carries its original system message in history, so
+the context is captured once, at session start, and not re-injected.
 
 `lib/agent-tool-runtime.ts` owns the tool execution lifecycle.
 

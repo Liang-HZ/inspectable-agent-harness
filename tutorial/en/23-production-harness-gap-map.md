@@ -26,9 +26,9 @@ After reading this chapter, you should understand:
 | Mechanism | This project today | What production harnesses do |
 | --- | --- | --- |
 | OS-level sandbox | path policy + lexical argument screening, no kernel enforcement | Codex: macOS Seatbelt / Linux Landlock; Claude Code: sandbox mode |
-| Environment context injection | system prompt is a hard-coded constant; no cwd/date/tree digest | auto-injected environment block + AGENTS.md / CLAUDE.md project memory |
-| Model-call retry | 429/5xx/dropped stream goes straight to `run_failed` | retryable-error classification + exponential backoff |
-| Provider coverage | OpenAI's two wire forms only; capabilities declared but never consumed | multiple provider dialects; Anthropic Messages is the real touchstone |
+| Environment context injection | **done**: cwd/date/git/tree/AGENTS.md injected into the system message | auto-injected environment block + AGENTS.md / CLAUDE.md project memory |
+| Model-call retry | **done**: retryable-error classification + exponential backoff (not after the stream opens) | retryable-error classification + exponential backoff |
+| Provider coverage | **partly done**: Anthropic Messages mapping implemented and tested, not wired to a live client | multiple provider dialects; Anthropic Messages is the real touchstone |
 | MCP | `'mcp'` in the source enum is a placeholder | full discovery/dispatch/lifecycle |
 | Subagents | none | Claude Code's Task tool spawns subtasks |
 | Hooks and persistent rules | `hook`/`guardian` decision sources are placeholders; every ask is approved one-off | settings allowlists, "approved for session," hook chains |
@@ -38,7 +38,11 @@ After reading this chapter, you should understand:
 
 The table is an index; the sections below expand each topic in the same
 structure: this project today → the production approach → why not here, and
-when it becomes worth doing.
+when it becomes worth doing. Items 2, 3, and 4 are marked "done" — they were
+originally gaps this chapter listed, then closed following the recommended
+order at the end of the chapter. They are kept here because the path from
+"declared gap" to "closed" is itself worth recording, and because it shows the
+chapter's methodology actually redeeming itself.
 
 ## 1. OS-Level Sandbox
 
@@ -64,69 +68,81 @@ real execution enforcement absent — is exactly what this book wants to
 teach. When it becomes worth doing: the moment this harness has to run on
 untrusted input, it stops being optional.
 
-## 2. The Other Half of Context Assembly
+## 2. The Other Half of Context Assembly (done)
 
-**Today**: `AGENT_SYSTEM_MESSAGE` in `lib/agent.ts` is a hard-coded string
-constant; the user prompt is assembled by `buildAgentPrompt` from three
-sections — Task/Goal/Context — where Context is **manually supplied by the
-user**, not collected by the runtime. No cwd injection, no current date, no
-directory-tree digest, no git status, and no AGENTS.md / CLAUDE.md-style
-project memory mechanism — everything the model knows about "where it is"
-comes from tool-call exploration.
+**Original gap**: `AGENT_SYSTEM_MESSAGE` in `lib/agent.ts` used to be a
+hard-coded string constant, with no cwd, date, directory digest, or git
+status, and no AGENTS.md / CLAUDE.md-style project memory — everything the
+model knew about "where it is" had to come from tool exploration.
 
-**Production**: Codex and Claude Code both assemble an environment block per
-turn (cwd, date, platform, directory overview, git status) and inject the
-project root's AGENTS.md / CLAUDE.md content as persistent instructions.
+**Production**: Codex and Claude Code both assemble an environment block at
+session start (cwd, date, platform, directory overview, git status) and inject
+the project root's AGENTS.md / CLAUDE.md content as persistent instructions.
 This is the often-overlooked other half of the harness story: tools decide
-what the model can **do**; context assembly decides what the model
-**knows**.
+what the model can **do**; context assembly decides what the model **knows**.
 
-**Why not here**: not hard, just not its turn yet — the tutorial's main
-thread patched behavioral boundaries first (shell/approval/resume/
-compaction). It is also the **cheapest gap to close**: one pure function
-that folds environment facts into the system message, a set of tests
-asserting the injected content, one tutorial chapter. That is why it is
-first in the recommended order.
+**How this project closed it**: `lib/agent-environment-context.ts` splits the
+layer in two — `gatherAgentEnvironmentContext` (reads real fs/git, all
+best-effort, degrading any failed field to `null` rather than failing the run)
+and `buildAgentSystemMessage` (a pure function that folds the facts into an
+`<environment_context>` / `<project_instructions>` block). It injects once, at
+fresh-session start, baked into the first system message; a resumed session
+already carries its original system message in history, so it is not
+re-injected. This is exactly what "cheapest gap to close" looks like when
+redeemed: a gather/format-split module, a set of provider-free tests, one
+injection point.
 
-## 3. Model-Call Retry and Backoff
+## 3. Model-Call Retry and Backoff (done)
 
-**Today**: the model gateway (`lib/model-gateway.ts`) has no retry logic at
-all. 429s, 5xxs, and dropped streams propagate up to the sampling loop and
-become a terminal `run_failed` event. The terminal event itself is complete
-(that was a real fix — runs never hang silently), but the recovery strategy
-is zero: one transient hiccup ends the whole run.
+**Original gap**: the model gateway had no retry logic; 429s, 5xxs, and
+dropped streams went straight to a terminal `run_failed`. The terminal event
+was complete (runs never hang silently), but the recovery strategy was zero —
+one transient hiccup ended the whole run.
 
-**Production**: production harnesses classify errors into retryable (429,
-5xx, dropped stream, timeout) and non-retryable (4xx semantic errors, auth
-failures), apply jittered exponential backoff to the former, and record
-retry counts in telemetry.
+**Production**: production harnesses classify errors into retryable (429, 5xx,
+dropped stream, timeout) and non-retryable (4xx semantic errors, auth
+failures), apply jittered exponential backoff to the former, and record retry
+counts in telemetry.
 
-**Why not here**: pedagogically, "failure must be visible" outranks
-"failure must self-heal" — retry logic written too early papers over
-boundary problems. But this gap hurts first in real use: a long conversation
-dies at round ten because of one 429, and a failed compaction summary call
-takes the whole run down with it (declared in chapter 21). It is second in
-the recommended order.
+**How this project closed it**: `lib/model-retry.ts`'s `runWithModelRetry`
+does full-jitter exponential backoff, and `isRetryableModelError` draws the
+line explicitly — retryable (429/408/409/5xx, transport failures like
+`ECONNRESET` / `APIConnectionError`) versus not (4xx, and a deliberate abort,
+which is never retried). In the gateway, `createResponse` is retried in full;
+`streamResponse` **only retries opening the stream** — once events flow the
+runtime may already have committed assistant text, so a mid-stream reconnect
+would double-emit, and that failure still surfaces as `run_failed`. That
+boundary is the teachable part: not "wrap everything in a retry," but thinking
+through *which phase* is safe to retry.
 
-## 4. Provider Coverage
+## 4. Provider Coverage (mapping layer done)
 
-**Today**: the provider-neutral `AgentResponseItem` IR has only ever been
-validated against OpenAI's two wire forms (Chat Completions, Responses).
-`AgentModelCapabilities` (tools/streaming/streamingUsage/parallelToolCalls)
-is declared by every dialect, but **no runtime code reads it today** — a
-declared contract with no consumer, which is the honest state of things.
+**Original gap**: the provider-neutral IR had only been validated against
+OpenAI's two wire forms (Chat Completions, Responses), whose message models
+are near-identical — so they cannot show whether the IR survives a
+*structurally different* protocol.
 
 **Production**: supporting multiple providers is not adding a baseURL; it is
-subjecting the IR to a structurally different protocol. The Anthropic
-Messages API is the real touchstone: content is an array of blocks rather
-than a string, tool results return as `tool_result` blocks inside user
-messages, and system is a top-level parameter rather than a message. Any
-OpenAI-shaped shortcut in the IR gets exposed at exactly those three spots.
+subjecting the IR to a structurally different protocol. The Anthropic Messages
+API is the real touchstone, differing at three load-bearing spots: content is
+an array of blocks (`text` / `tool_use` / `tool_result`) rather than a string
+plus a sibling `tool_calls`; a tool result returns as a `tool_result` block
+inside a *user* message (not a dedicated tool role, so consecutive tool
+results coalesce into one user turn); and system is a top-level parameter
+rather than a message. Any OpenAI-shaped shortcut in the IR gets exposed at
+exactly those spots.
 
-**Why not here**: two OpenAI forms were enough to establish the teaching
-value of the dialect boundary. But "provider-neutral" is currently a claim
-untested by a second party — adding an Anthropic dialect is the shortest
-path to testing it, and it is third in the recommended order.
+**How this project closed it**: `lib/anthropic-messages-mapping.ts` implements
+those three mappings as pure functions with a test for each — the IR passes
+cleanly through Anthropic's shape, which turns "provider-neutral" from a claim
+into a fact checked by a second party. **It is deliberately not wired to a
+live client**: the `ModelProviderDialect` contract is currently typed to the
+OpenAI SDK client, and adding `@anthropic-ai/sdk` plus a new `OPENAI_WIRE_API`
+value is plumbing, not modeling — and all the value of testing neutrality lives
+in the modeling half (there is no Anthropic key to run against anyway). The
+honest boundary sits here: the mapping is proven, the wiring is left as a
+mechanical next step, and it is where the `capabilities` shape would finally
+gain a second consumer.
 
 ## 5. MCP
 
@@ -243,16 +259,18 @@ section; collected here in one place:
 
 ## If You Want to Keep Adding Capability
 
-The recommended order, with reasons:
+The recommended order, with reasons (the first three are checked off — closed
+in this order; see items 2, 3, and 4 above):
 
-1. **Environment context injection** — cheapest, risk-free, improves every
+1. ✅ **Environment context injection** — cheapest, risk-free, improves every
    real use immediately; the standard cadence of pure function + tests + one
    tutorial chapter.
-2. **Model-call retry** — the gap that hurts first in real use; error
+2. ✅ **Model-call retry** — the gap that hurts first in real use; error
    classification is itself boundary design worth teaching.
-3. **Anthropic dialect** — the shortest path to testing the central
-   "provider-neutral" claim; also the first time the capabilities
-   declarations get consumed by the runtime.
+3. ✅ **Anthropic mapping layer** — the shortest path to testing the central
+   "provider-neutral" claim. The mapping is implemented and tested; wiring a
+   live client (`@anthropic-ai/sdk` + a new wire-api value + `capabilities`
+   consumption) is the mechanical tail left behind.
 4. **OS sandbox** — after the first three make the harness worth daily use,
    the safety boundary graduates from a teaching declaration to kernel
    enforcement.
@@ -262,7 +280,9 @@ The recommended order, with reasons:
 The logic of the order: first what makes it useful (1, 2), then what tests
 the core claim (3), then what makes it trustworthy (4), and finally what
 makes it open (5). Every step follows chapter 17's discipline: define the
-boundary, expose the data flow, write real tests, update the tutorial.
+boundary, expose the data flow, write real tests, update the tutorial. The
+first three steps are now walked, which is exactly what that discipline looks
+like in practice.
 
 ## Chapter Summary
 
