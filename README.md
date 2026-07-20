@@ -142,6 +142,9 @@ lib/agent-tools.ts                 tool groups and registry
 lib/agent-builtins.ts              read-only file tools (read, grep, find, ls)
 lib/agent-editing-builtins.ts      write/edit tools
 lib/agent-shell-builtins.ts        shell tool behind a safe-command classifier
+lib/agent-shell-sandbox.ts         OS sandbox plan resolver (fail-closed, macOS/Linux)
+lib/agent-shell-sandbox-macos.ts   macOS Seatbelt SBPL profile builder
+lib/agent-shell-sandbox-linux.ts   Linux bubblewrap argv builder
 lib/agent-session-store.ts         JSONL session persistence and resume
 ```
 

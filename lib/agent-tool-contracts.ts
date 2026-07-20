@@ -62,6 +62,11 @@ export type AgentToolDefinition = {
 
 export type AgentToolRuntimeContext = {
   pathAccess: AgentToolPathAccessPolicy;
+  // The run sandbox mode, consumed by the shell tool to decide how to wrap
+  // `bash -c` in an OS-level sandbox (sandbox-exec on macOS, bwrap on Linux).
+  // Optional because only the shell tool reads it; other tools ignore it.
+  // See `lib/agent-shell-sandbox.ts` for the fail-closed contract.
+  sandboxMode?: AgentRunPolicy['sandboxMode'];
 };
 
 export type AgentToolDefinitionGroup = {

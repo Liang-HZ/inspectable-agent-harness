@@ -240,7 +240,10 @@ stderr:
 - **No OS-level sandbox.** Under workspace_write + never, unsafe commands
   execute directly on your machine. Codex enforces with Seatbelt on macOS
   and Landlock on Linux; this project's only enforcement layer today is
-  the permission boundary itself.
+  the permission boundary itself. **[Fixed in chapter 24]**: macOS
+  `sandbox-exec` + Linux `bwrap` now enforce under `read_only` /
+  `workspace_write`, with `danger_full_access` as an explicit opt-out and
+  fail-closed when the sandbox binary is missing.
 - **No PTY / interactive sessions.** stdin is ignored, so `vim` or `top`
   hang until the timeout.
 - **No background execution.** Long commands can only raise `timeoutMs`.

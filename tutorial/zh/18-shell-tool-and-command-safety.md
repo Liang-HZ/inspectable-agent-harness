@@ -158,7 +158,7 @@ stderr:
 
 ## 还没做什么
 
-- **没有 OS-level sandbox**。workspace_write + never 策略下，unsafe 命令直接在你的机器上执行。Codex 在 macOS 用 Seatbelt、Linux 用 Landlock 做 OS 强制；这个项目当前唯一的强制层是 permission 边界本身。
+- **没有 OS-level sandbox**。workspace_write + never 策略下，unsafe 命令直接在你的机器上执行。Codex 在 macOS 用 Seatbelt、Linux 用 Landlock 做 OS 强制；这个项目当前唯一的强制层是 permission 边界本身。**[第 24 章已补]**：macOS `sandbox-exec` + Linux `bwrap` 在 `read_only` / `workspace_write` 下强制,`danger_full_access` 显式 opt-out,fail-closed。
 - **没有 PTY/交互式会话**。stdin 被 ignore,`vim`、`top` 这类命令会挂到超时。
 - **没有后台执行**。长命令只能靠 timeoutMs 提高上限。
 - **approval 的 ask 仍然 fail closed**。下一章解决。

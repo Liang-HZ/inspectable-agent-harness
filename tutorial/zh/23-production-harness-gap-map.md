@@ -15,7 +15,7 @@
 
 | 机制 | 本项目现状 | 生产 harness 的做法 |
 | --- | --- | --- |
-| OS 级沙箱 | path policy + 词法级参数筛查，无内核强制 | Codex：macOS Seatbelt / Linux Landlock；Claude Code：sandbox 模式 |
+| OS 级沙箱 | **已补**：macOS `sandbox-exec` + Linux `bwrap` 在 `read_only` / `workspace_write` 下强制（第 24 章），`danger_full_access` 显式 opt-out，fail-closed | Codex：macOS Seatbelt / Linux Landlock；Claude Code：sandbox 模式 |
 | 环境上下文注入 | **已补**：cwd/日期/git/目录/AGENTS.md 注入 system message | 自动注入环境块 + AGENTS.md / CLAUDE.md 项目记忆 |
 | 模型调用重试 | **已补**：可重试错误分类 + 指数退避（建流后不重试） | 可重试错误分类 + 指数退避 |
 | Provider 覆盖 | **部分已补**：Anthropic Messages 映射层已实现并测试，未接活客户端 | 多 provider dialect，Anthropic Messages 是真正试金石 |
@@ -28,14 +28,13 @@
 
 表格给的是索引，下面按主题展开。每条按同一结构：本项目现状 → 生产 harness 的做法 → 为什么这里不做、何时值得做。第 2、3、4 条标着"已补"——它们最初是本章列出的缺口，后来按本章末尾的推荐顺序补上了；这里保留它们，既记录了从"声明缺口"到"补齐"的完整路径，也说明本章的方法论确实在自我兑现。
 
-## 1. OS 级沙箱
+## 1. OS 级沙箱（已补）
 
-**现状**：这个项目的执行边界是两层叠加——文件工具走 path policy（`lib/agent-path-policy.ts`），shell 走参数级 safe-command 分类器（`lib/agent-shell-safety.ts`）加 permission 合成规则。第 18 章已经把话说透了：分类器是**词法的**，它看命令字符串长什么样，跟不进符号链接，也看不见运行时行为。`cat ./innocent.txt` 词法上干净，但如果那是指向 `/etc/passwd` 的链接，读到的还是项目外的文件。
+**原缺口**：这个项目的执行边界是两层叠加——文件工具走 path policy（`lib/agent-path-policy.ts`），shell 走参数级 safe-command 分类器（`lib/agent-shell-safety.ts`）加 permission 合成规则。第 18 章已经把话说透了：分类器是**词法的**，它看命令字符串长什么样，跟不进符号链接，也看不见运行时行为。`cat ./innocent.txt` 词法上干净，但如果那是指向 `/etc/passwd` 的链接，读到的还是项目外的文件。
 
-**生产做法**：Codex 在 macOS 用 Seatbelt、Linux 用 Landlock，把文件系统和网络访问在内核层锁死——命令字符串骗得过词法分析，骗不过内核。Claude Code 也有 sandbox 模式做同类隔离。在那种架构里分类器只负责省审批，沙箱负责兜底。
+**生产做法**：Codex 在 macOS 用 Seatbelt、Linux 用 Landlock + bubblewrap，把文件系统和网络访问在内核层锁死——命令字符串骗得过词法分析，骗不过内核。Claude Code 也有 sandbox 模式做同类隔离。在那种架构里分类器只负责省审批，沙箱负责兜底。
 
-**为什么不做**：OS 沙箱是平台相关的深水区（每个平台一套机制，且和教学主线无关），而"分类器省审批、permission 边界做决策、真正的执行强制缺位"这个结构本身就是要教的内容。什么时候值得做：当这个 harness 要在不受信任的输入上运行时——那一刻它就不再是可选项。
-
+**已补做法**（第 24 章）：`lib/agent-shell-sandbox.ts` 在 `read_only` / `workspace_write` 模式下把 `bash -c` 包进 macOS `sandbox-exec`（SBPL profile 用 `(deny default)` 起步）或 Linux `bwrap`（`--ro-bind / /` + `--bind <project>` + `--unshare-user/-pid/-net`）。`workspace_write` 下 `.git` / `data/agent-sessions` / `.env*` / `node_modules` / `.next` 保持只读 carveout。`danger_full_access` 显式 opt-out，fail-closed 拒绝降级。词法分类器、path policy、env 白名单全部保留原位，与 OS 沙箱是叠加防御。留下的尾巴：seccomp 加固、Windows 后端、proxy 网络模式。
 ## 2. Context 组装的另一半（已补）
 
 **原缺口**：`lib/agent.ts` 的 `AGENT_SYSTEM_MESSAGE` 曾是一个写死的字符串常量，没有 cwd、日期、目录摘要、git 状态，也没有 AGENTS.md / CLAUDE.md 式的项目记忆——模型对"自己在哪"的全部认知只能来自工具探索。
@@ -113,15 +112,15 @@
 
 ## 如果要继续加能力
 
-推荐顺序及理由（打勾的三项已按此顺序补上，见上文第 2、3、4 条）：
+推荐顺序及理由（打勾的四项已按此顺序补上，见上文第 1、2、3、4 条）：
 
 1. ✅ **环境上下文注入**——最便宜、无风险、立刻提升每一次真实使用；纯函数 + 测试 + 一章教程的标准节奏。
 2. ✅ **模型调用重试**——真实使用里最先疼的缺口；错误分类本身是有教学价值的边界设计。
 3. ✅ **Anthropic 映射层**——检验"provider-neutral"这个核心主张的最短路径。映射已实现并测试；接活客户端（`@anthropic-ai/sdk` + 新 wire-api 枚举 + `capabilities` 消费）是留下的机械尾巴。
-4. **OS 沙箱**——在前三项让 harness 值得日常使用之后，安全边界从教学声明升级为内核强制。
+4. ✅ **OS 沙箱**——在前三项让 harness 值得日常使用之后，安全边界从教学声明升级为内核强制。第 24 章已补：macOS `sandbox-exec` + Linux `bwrap`，fail-closed，carveout 保护 `.git`/`.env`/sessions/`node_modules`/`.next`。
 5. **MCP**——工具生态的接入点，占位枚举兑现之时。
 
-顺序的逻辑：先补"让它好用"的（1、2），再补"检验核心主张"的（3），再补"让它可信"的（4），最后是"让它开放"的（5）。每一步都遵守第 17 章的纪律：定义边界、暴露数据流、写真实测试、更新教程。前三步已经走完，正好演示了这套纪律在实践里长什么样。
+顺序的逻辑：先补"让它好用"的（1、2），再补"检验核心主张"的（3），再补"让它可信"的（4），最后是"让它开放"的（5）。每一步都遵守第 17 章的纪律：定义边界、暴露数据流、写真实测试、更新教程。前四步已经走完，正好演示了这套纪律在实践里长什么样。
 
 ## 本章小结
 

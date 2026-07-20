@@ -27,6 +27,10 @@ import {
   classifyShellCommandSafety,
   type ShellCommandSafetyDecision,
 } from './agent-shell-safety';
+import {
+  resolveShellSandboxPlan,
+  type AgentShellSandboxMode,
+} from './agent-shell-sandbox';
 
 export const SHELL_TOOL_HARD_TIMEOUT_MS = 60_000;
 export const DEFAULT_SHELL_COMMAND_TIMEOUT_MS = 10_000;
@@ -283,12 +287,45 @@ function runShellCommandProcess(
   workdirAbsolutePath: string,
   timeoutMs: number,
   signal: AbortSignal | undefined,
+  sandboxMode: AgentShellSandboxMode | undefined,
 ): Promise<SpawnedShellCommandResult> {
+  // Default to read_only when the runtime did not carry a sandbox mode (older
+  // call paths, or a future tool that does not populate the field). This is
+  // the safest default: it produces the most restrictive sandbox profile.
+  const effectiveSandboxMode: AgentShellSandboxMode =
+    sandboxMode ?? 'read_only';
+
+  const sandboxPlan = resolveShellSandboxPlan({
+    sandboxMode: effectiveSandboxMode,
+    projectRoot: currentProjectPathAccessPolicy.root,
+    command: command,
+  });
+
+  if (!sandboxPlan.ok) {
+    // Fail closed: surface the resolver's reason to the model as an
+    // EXECUTION_ERROR. The shell tool's existing error path serializes this
+    // into a tool result the model can read and react to.
+    return Promise.reject(
+      new AgentToolRespondToModelError(
+        sandboxPlan.errorCode,
+        sandboxPlan.reason,
+      ),
+    );
+  }
+
+  const { executable, argv } = sandboxPlan.plan;
+
   return new Promise((resolve, reject) => {
-    const child = spawn('bash', ['-c', command], {
+    // `detached: true` puts the child (sandbox-exec / bwrap / bash) in its
+    // own process group so a timeout/abort SIGKILL reaches bash too. Without
+    // this, killing sandbox-exec directly could orphan bash, because SIGKILL
+    // cannot be forwarded through the sandbox binary. bwrap's
+    // --die-with-parent is the belt; this is the suspenders.
+    const child = spawn(executable, argv, {
       cwd: workdirAbsolutePath,
       env: createSanitizedShellEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
 
     const stdout: CollectedProcessOutput = { text: '', truncated: false };
@@ -298,7 +335,17 @@ function runShellCommandProcess(
 
     function killChildProcess(): void {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL');
+        // Kill the whole process group (negative pid) so bash dies with
+        // sandbox-exec / bwrap. `child.pid` is the group leader's pid
+        // because of `detached: true`.
+        try {
+          process.kill(-child.pid!, 'SIGKILL');
+        } catch {
+          // If the group is already gone (ESRCH), fall back to killing the
+          // child directly. This is best-effort: by this point the child is
+          // almost certainly already dead.
+          child.kill('SIGKILL');
+        }
       }
     }
 
@@ -426,6 +473,7 @@ async function executeShellCommand(
     workdir.absolutePath,
     timeoutMs,
     signal,
+    runtime.sandboxMode,
   );
   const durationMs = Date.now() - startedAt;
 

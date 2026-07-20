@@ -25,7 +25,7 @@ After reading this chapter, you should understand:
 
 | Mechanism | This project today | What production harnesses do |
 | --- | --- | --- |
-| OS-level sandbox | path policy + lexical argument screening, no kernel enforcement | Codex: macOS Seatbelt / Linux Landlock; Claude Code: sandbox mode |
+| OS-level sandbox | **Done**: macOS `sandbox-exec` + Linux `bwrap` enforce under `read_only` / `workspace_write` (chapter 24); `danger_full_access` is an explicit opt-out; fail-closed | Codex: macOS Seatbelt / Linux Landlock; Claude Code: sandbox mode |
 | Environment context injection | **done**: cwd/date/git/tree/AGENTS.md injected into the system message | auto-injected environment block + AGENTS.md / CLAUDE.md project memory |
 | Model-call retry | **done**: retryable-error classification + exponential backoff (not after the stream opens) | retryable-error classification + exponential backoff |
 | Provider coverage | **partly done**: Anthropic Messages mapping implemented and tested, not wired to a live client | multiple provider dialects; Anthropic Messages is the real touchstone |
@@ -44,7 +44,7 @@ order at the end of the chapter. They are kept here because the path from
 "declared gap" to "closed" is itself worth recording, and because it shows the
 chapter's methodology actually redeeming itself.
 
-## 1. OS-Level Sandbox
+## 1. OS-Level Sandbox (Done)
 
 **Today**: this project's execution boundary is two stacked layers — file
 tools go through path policy (`lib/agent-path-policy.ts`), and shell goes
@@ -61,12 +61,7 @@ lexical analysis but not the kernel. Claude Code has a sandbox mode for the
 same kind of isolation. In that architecture the classifier only saves
 approvals; the sandbox is the backstop.
 
-**Why not here**: an OS sandbox is platform-specific deep water (one
-mechanism per platform, orthogonal to the teaching thread), and the
-structure itself — classifier saves approvals, permission boundary decides,
-real execution enforcement absent — is exactly what this book wants to
-teach. When it becomes worth doing: the moment this harness has to run on
-untrusted input, it stops being optional.
+**What was added** (chapter 24): `lib/agent-shell-sandbox.ts` wraps `bash -c` in macOS `sandbox-exec` (an SBPL profile starting with `(deny default)`) or Linux `bwrap` (`--ro-bind / /` + `--bind <project>` + `--unshare-user/-pid/-net`) under `read_only` / `workspace_write`. Under `workspace_write`, `.git` / `data/agent-sessions` / `.env*` / `node_modules` / `.next` stay read-only carveouts. `danger_full_access` is an explicit opt-out, and fail-closed refuses to degrade when the sandbox binary is missing. The lexical classifier, path policy, and env allowlist all stay in place as defense in depth alongside the OS sandbox. Tails left: seccomp hardening, a Windows backend, a proxy-based network allowlist mode.
 
 ## 2. The Other Half of Context Assembly (done)
 
@@ -259,7 +254,7 @@ section; collected here in one place:
 
 ## If You Want to Keep Adding Capability
 
-The recommended order, with reasons (the first three are checked off — closed
+The recommended order, with reasons (the first four are checked off — closed
 in this order; see items 2, 3, and 4 above):
 
 1. ✅ **Environment context injection** — cheapest, risk-free, improves every
@@ -271,9 +266,11 @@ in this order; see items 2, 3, and 4 above):
    "provider-neutral" claim. The mapping is implemented and tested; wiring a
    live client (`@anthropic-ai/sdk` + a new wire-api value + `capabilities`
    consumption) is the mechanical tail left behind.
-4. **OS sandbox** — after the first three make the harness worth daily use,
+4. ✅ **OS sandbox** — after the first three make the harness worth daily use,
    the safety boundary graduates from a teaching declaration to kernel
-   enforcement.
+   enforcement. Done in chapter 24: macOS `sandbox-exec` + Linux `bwrap`,
+   fail-closed, carveouts protect `.git` / `.env` / sessions / `node_modules`
+   / `.next`.
 5. **MCP** — the attachment point for the tool ecosystem, redeeming the
    placeholder enum.
 
@@ -281,7 +278,7 @@ The logic of the order: first what makes it useful (1, 2), then what tests
 the core claim (3), then what makes it trustworthy (4), and finally what
 makes it open (5). Every step follows chapter 17's discipline: define the
 boundary, expose the data flow, write real tests, update the tutorial. The
-first three steps are now walked, which is exactly what that discipline looks
+first four steps are now walked, which is exactly what that discipline looks
 like in practice.
 
 ## Chapter Summary

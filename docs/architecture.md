@@ -114,6 +114,9 @@ lib/agent-builtins.ts               Built-in read-only local file tools
 lib/agent-editing-builtins.ts       Built-in write/edit local file tools
 lib/agent-shell-builtins.ts         Built-in shell tool
 lib/agent-shell-safety.ts           Safe-command classifier for the shell tool
+lib/agent-shell-sandbox.ts          OS sandbox plan resolver (fail-closed, platform dispatch)
+lib/agent-shell-sandbox-macos.ts    macOS Seatbelt SBPL profile builder
+lib/agent-shell-sandbox-linux.ts    Linux bubblewrap argv builder
 lib/agent-response-items.ts         Provider-neutral model-visible history contract
 lib/agent-compaction.ts             History compaction decision and full-replacement transform
 lib/model-provider-dialect.ts       Provider dialect contract
@@ -678,13 +681,22 @@ too, because safe commands skip approval entirely:
   `--exec-path` can retarget the repository or executed programs) and
   `--output` after it; `find` keeps its action-flag denylist.
 
-This is still a lexical screen, not a sandbox: it cannot see through symlinks
-or know what a command actually touches at runtime. The shell tool also spawns
-its child process with an allowlisted environment (`PATH`, `HOME`, locale
-variables, ...) instead of the full `process.env`, so an approved `env` or
-`printenv` cannot leak `OPENAI_API_KEY` into model-visible output, and the
-`workdir` argument goes through the same realpath-then-recheck sequence as the
-file builtins to block symlinked workdir escapes.
+The lexical classifier is still a lexical screen, not a sandbox in itself: it
+cannot see through symlinks or know what a command actually touches at
+runtime. It is now the *second* layer of defense. The first layer is the
+OS-level sandbox enforced by `lib/agent-shell-sandbox.ts`: in `read_only` and
+`workspace_write` modes the shell tool wraps `bash -c` in macOS Seatbelt
+(`sandbox-exec`) or Linux `bubblewrap` before spawning, so even an approved
+unsafe command cannot escape the project root, cannot reach the network, and
+cannot rewrite `.git` / `.env` / `data/agent-sessions` / `node_modules` /
+`.next` even in `workspace_write`. `danger_full_access` bypasses the OS
+sandbox by explicit user opt-in. The shell tool also spawns its child process
+with an allowlisted environment (`PATH`, `HOME`, locale variables, ...) instead
+of the full `process.env`, so an approved `env` or `printenv` cannot leak
+`OPENAI_API_KEY` into model-visible output, and the `workdir` argument goes
+through the same realpath-then-recheck sequence as the file builtins to block
+symlinked workdir escapes. See tutorial chapter 24 for the sandbox design and
+fail-closed contract.
 
 The shell tool plugs into permissions through the optional `decidePermission`
 hook on the tool contract. The runtime composition rule lives in
@@ -1085,11 +1097,19 @@ Current implementation status:
   `/api/agent` route) still raise `AgentApprovalRequiredError` as a
   fail-closed placeholder, since there is no push channel to surface the
   request to a user.
-- Sandbox mode is not an OS sandbox yet, but it now determines both the
-  effective path access policy and the provider-visible built-in tool surface.
-  `danger_full_access` widens path-declaring tools to absolute filesystem
-  access, while `read_only` and `workspace_write` keep the current project
-  boundary for built-in file tools.
+- Sandbox mode is now backed by an OS-level sandbox. In `read_only` and
+  `workspace_write` modes the shell tool wraps `bash -c` in macOS Seatbelt
+  (`sandbox-exec`) or Linux `bubblewrap` via `lib/agent-shell-sandbox.ts`,
+  enforcing project-root confinement, no network, and read-only carveouts for
+  `.git` / `.env` / `data/agent-sessions` / `node_modules` / `.next` even when
+  the run approval policy allows a command. `danger_full_access` opts out of
+  the OS sandbox and runs raw `bash -c`. The sandbox binary is required for
+  sandboxed modes: if it is missing the shell tool fails closed with
+  `EXECUTION_ERROR` rather than silently running unsandboxed. Sandbox mode
+  also still determines the effective path access policy and the
+  provider-visible built-in tool surface. `danger_full_access` widens
+  path-declaring tools to absolute filesystem access, while `read_only` and
+  `workspace_write` keep the current project boundary for built-in file tools.
 
 `danger_full_access` is a path/sandbox policy mode, not a fact that a tool can
 claim for itself. It should be selected by the user, app, or run configuration,
@@ -1399,13 +1419,18 @@ The current implementation is intentionally small:
 
 Future work should grow the harness in this order:
 
-1. enforce OS-level sandboxing under the existing path/permission boundaries
-2. add richer tools and MCP-style external tool registration
-3. configure the compaction threshold and other run limits per model
+1. add richer tools and MCP-style external tool registration
+2. configure the compaction threshold and other run limits per model
+3. harden the Linux sandbox path with seccomp (bwrap alone gives ~95% of
+   practical containment; seccomp closes exotic syscall attack surface)
+4. add a Windows sandbox backend (Restricted Token + ACL) and a proxy-based
+   network allowlist mode for sandboxed runs that need limited outbound access
 
 Already done: interactive approval pause/resume (chapter 19), a shell tool
 behind a safe-command classifier (chapter 18), session replay/resume for
-multi-turn conversations (chapter 20), and context compaction (chapter 21).
+multi-turn conversations (chapter 20), context compaction (chapter 21), and
+OS-level sandboxing for the shell tool via macOS Seatbelt / Linux bubblewrap
+(chapter 24).
 
 ## Maintenance Rule
 

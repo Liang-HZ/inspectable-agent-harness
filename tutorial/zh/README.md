@@ -34,6 +34,7 @@ English mirror: [../en/README.md](../en/README.md)
 | [21](21-context-compaction.md) | Context Compaction | 到达 token 阈值就自动压缩历史，让长对话不会无限增长。 |
 | [22](22-frontend-dark-mode-and-polish.md) | 前端 Dark Mode 与页面打磨 | 补上系统级 dark mode，并逐页验证 Agent/Chat 工作台的可用性。 |
 | [23](23-production-harness-gap-map.md) | 与生产 harness 的差距总表 | 主动画出全书边界：对照 Codex/Claude Code 列出缺哪些机制、为什么不做、何时值得做。 |
+| [24](24-os-level-sandbox.md) | OS 级沙箱 | 把第 18 章的词法分类器升级为内核强制：macOS `sandbox-exec` + Linux `bwrap`,fail-closed,carveout 保护 `.git`/`.env`/sessions。 |
 
 章节表之外还有一份[附录：前置知识桥](appendix-prerequisites.md)，给跨行读者补 TypeScript union、Zod、App Router、SSE、tool-calling 协议和 async 时序六座桥。
 

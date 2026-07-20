@@ -316,6 +316,7 @@ async function executeToolWithRuntimeLimits(
             toolDefinition.pathAccess,
             context.policy.sandboxMode,
           ),
+          sandboxMode: context.policy.sandboxMode,
         },
       ),
     ).then(settleWithResult, settleWithError);
