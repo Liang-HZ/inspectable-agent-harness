@@ -1,166 +1,89 @@
-# Next.js TypeScript Model API Demo
+# Inspectable Agent Harness
 
-This is a minimal Next.js backend demo for calling an OpenAI-compatible Chat
-Completions API and growing that call into a small inspectable agent backend.
+**A coding-agent runtime built from a bare OpenAI-compatible API — plus a 25-chapter tutorial explaining why every boundary sits where it does.**
 
-## Setup
+[中文说明](README.zh-CN.md) · [中文教程](tutorial/zh/README.md) · [English tutorial](tutorial/en/README.md)
 
-Create `.env.local` from the example file:
+TypeScript · Next.js · 141 deterministic tests · no agent framework, no LangChain, no agent SDK
+
+---
+
+## Why this exists
+
+Most agent tutorials stop at "call the model in a loop". The parts that actually make a coding agent hard are somewhere else:
+
+- when an assistant message is safe to *commit* while it is still streaming
+- where a cancellation boundary can sit without corrupting the transcript
+- how a tool contract survives a provider's strict JSON-schema mode
+- what happens to a run that pauses mid-flight for human approval — and how it resumes
+- how context gets compacted without breaking tool-call / tool-result pairing
+- how a shell tool is actually confined at the OS level
+
+This project implements those one at a time, in the order a real project hits them. The tutorial is the design log: each chapter explains the problem that forced the next boundary into existence.
+
+It is a **reference harness for reading and learning**, not a production CLI. Chapter 23 is an explicit gap map against production harnesses (Codex CLI / Claude Code): what is missing, and what closing it would take.
+
+## What's inside
+
+| Capability | Where | Chapter |
+| --- | --- | --- |
+| Streaming sampling loop, commit semantics | `lib/agent.ts`, `lib/agent-model-stages.ts` | [10](tutorial/en/10-streaming-sampling-and-commit-semantics.md) |
+| Cancellation boundaries and runtime events | `lib/agent-run-context.ts`, `lib/agent-events.ts` | [05](tutorial/en/05-streaming-cancellation-and-events.md) |
+| Provider dialects — OpenAI Chat Completions / Responses, Anthropic Messages | `lib/model-provider-dialect.ts`, `lib/anthropic-messages-mapping.ts` | [08](tutorial/en/08-provider-dialect-boundary.md) |
+| Provider-neutral response items (the runtime spine) | `lib/agent-response-items.ts` | [09](tutorial/en/09-response-items-and-runtime-spine.md) |
+| Tool runtime boundary, contracts, strict-schema adaptation | `lib/agent-tool-runtime.ts`, `lib/agent-tool-contracts.ts`, `lib/openai-tool-schema.ts` | [06](tutorial/en/06-tool-runtime-and-permission-skeleton.md) · [13](tutorial/en/13-tool-output-and-strict-openai-schema.md) · [15](tutorial/en/15-tool-contract-boundary-and-toy-removal.md) |
+| Permission policy, path policy, read-before-edit | `lib/agent-permissions.ts`, `lib/agent-path-policy.ts` | [06](tutorial/en/06-tool-runtime-and-permission-skeleton.md) · [12](tutorial/en/12-real-readonly-tools.md) |
+| Shell tool behind a safe-command classifier | `lib/agent-shell-builtins.ts`, `lib/agent-shell-safety.ts` | [18](tutorial/en/18-shell-tool-and-command-safety.md) |
+| OS-level sandbox — macOS `sandbox-exec`, Linux `bwrap`, fail-closed | `lib/agent-shell-sandbox-macos.ts`, `lib/agent-shell-sandbox-linux.ts` | [24](tutorial/en/24-os-level-sandbox.md) |
+| Approval pause and resume | `lib/agent-approvals.ts` | [19](tutorial/en/19-approval-pause-and-resume.md) |
+| JSONL session store, replay, resume | `lib/agent-session-store.ts` | [07](tutorial/en/07-jsonl-sessions-and-usage.md) · [20](tutorial/en/20-session-replay-and-resume.md) |
+| Context compaction | `lib/agent-compaction.ts` | [21](tutorial/en/21-context-compaction.md) |
+| Environment context injection, retry with backoff | `lib/agent-environment-context.ts`, `lib/model-retry.ts` | [23](tutorial/en/23-production-harness-gap-map.md) |
+| Debug console and session viewer | `app/` | [14](tutorial/en/14-debug-console-and-session-viewer.md) |
+| Deterministic runtime tests | `tests/` | [11](tutorial/en/11-deterministic-runtime-tests.md) |
+
+## Quick start
 
 ```bash
-cp .env.example .env.local
+git clone https://github.com/Liang-HZ/inspectable-agent-harness.git
+cd inspectable-agent-harness
+npm install
+cp .env.example .env.local   # OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+npm run dev                  # → http://localhost:3000
 ```
 
-Then fill in:
+Works with any OpenAI-compatible provider (OpenAI, DeepSeek, Qwen, …), and with Anthropic Messages through the mapping layer. Chapter [00](tutorial/en/00-environment-and-first-run.md) walks the environment end to end, including a first run over `curl`.
 
 ```bash
-OPENAI_API_KEY=sk-your-api-key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_WIRE_API=openai-chat-completions
+npm test         # 141 deterministic tests, no network
+npm run typecheck
 ```
 
-For compatible providers, keep the `/v1` suffix when their docs require it, set
-`OPENAI_MODEL` to that provider's model id, and keep
-`OPENAI_WIRE_API=openai-chat-completions` (most compatible providers do not
-implement the OpenAI Responses API).
+## The tutorial
 
-For a step-by-step environment walkthrough (Node, ripgrep, API key options,
-first run), see tutorial chapter 00:
-[`tutorial/zh/00-environment-and-first-run.md`](tutorial/zh/00-environment-and-first-run.md) /
-[`tutorial/en/00-environment-and-first-run.md`](tutorial/en/00-environment-and-first-run.md).
+25 chapters, Chinese and English, reconstructed from the project's real evolution — git history, the current workspace, and the trade-offs already baked into the code.
 
-## Run
+- **[中文教程](tutorial/zh/README.md)** — chapter map and reading order
+- **[English tutorial](tutorial/en/README.md)**
 
-```bash
-npm run dev
-```
+It is not a source index. It answers a different question: *why is the code cut into these boundaries and not others.* Each chapter ends with a verification point you can run yourself.
 
-Open:
+## Architecture
+
+- [`docs/architecture.md`](docs/architecture.md) — current module map and boundaries
+- [`docs/evolution.md`](docs/evolution.md) — how they got there
+- [`docs/research-codex-claude-code.md`](docs/research-codex-claude-code.md) — research notes on Codex CLI and Claude Code harness mechanics (2026-07)
+
+## API surface
 
 ```text
-http://localhost:3000
+POST /api/chat            single model call
+POST /api/agent           agent run, returns final answer + inspectable steps + usage
+POST /api/agent/stream    same run as Server-Sent Events (step / assistantDelta / done / error)
 ```
 
-## Call the API Route Directly
+Responses use an explicit discriminant (`{ ok: true, result }` / `{ ok: false, error }`). Route handlers stay thin: parse, validate, call the service, return JSON.
 
-```bash
-curl -X POST http://localhost:3000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"用一句话解释一下 TypeScript 为什么适合写后端。"}'
-```
+## License
 
-Successful responses use an explicit discriminant:
-
-```json
-{
-  "ok": true,
-  "result": {
-    "model": "gpt-4o-mini",
-    "content": "...",
-    "usage": null
-  }
-}
-```
-
-## Run the Agent Route Directly
-
-```bash
-curl -X POST http://localhost:3000/api/agent \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "task": "帮我设计一个下一步 agent 能力。",
-    "goal": "保持实现小而清晰。",
-    "context": "当前项目已经有 /api/chat。",
-    "temperature": 0.4
-  }'
-```
-
-The agent response includes the final answer, inspectable steps, and
-normalized token usage:
-
-```json
-{
-  "ok": true,
-  "result": {
-    "model": "gpt-4o-mini",
-    "answer": "...",
-    "steps": [
-      {
-        "order": 1,
-        "title": "Read task",
-        "detail": "..."
-      }
-    ],
-    "usage": {
-      "totalTokenUsage": { "inputTokens": 0, "outputTokens": 0, "...": "..." },
-      "lastTokenUsage": null,
-      "calls": []
-    }
-  }
-}
-```
-
-## Stream the Agent Route Directly
-
-```bash
-curl -N -X POST http://localhost:3000/api/agent/stream \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "task": "帮我找出当前项目里 agent 工具注册相关的文件，并解释它们的关系。",
-    "goal": "请使用本地文件探索工具完成，不要只凭记忆回答。",
-    "temperature": 0
-  }'
-```
-
-The streaming route returns Server-Sent Events. `step` events show agent progress,
-`assistantDelta` events stream assistant text, `done` carries the final result
-object, and `error` carries stream-time failures.
-
-Error responses use the same discriminant:
-
-```json
-{
-  "ok": false,
-  "error": "Field `message` is required."
-}
-```
-
-## Backend Structure
-
-```text
-app/api/chat/route.ts              HTTP entry point
-lib/chat-input.ts                  request body parsing and validation
-lib/env.ts                         environment variable reading
-lib/openai-compatible-client.ts    OpenAI-compatible SDK client
-lib/chat.ts                        model call service
-app/api/agent/route.ts             agent HTTP entry point
-app/api/agent/stream/route.ts      streaming agent SSE entry point
-lib/agent-input.ts                 agent request body parsing and validation
-lib/agent.ts                       agent orchestration service
-lib/agent-tools.ts                 tool groups and registry
-lib/agent-builtins.ts              read-only file tools (read, grep, find, ls)
-lib/agent-editing-builtins.ts      write/edit tools
-lib/agent-shell-builtins.ts        shell tool behind a safe-command classifier
-lib/agent-shell-sandbox.ts         OS sandbox plan resolver (fail-closed, macOS/Linux)
-lib/agent-shell-sandbox-macos.ts   macOS Seatbelt SBPL profile builder
-lib/agent-shell-sandbox-linux.ts   Linux bubblewrap argv builder
-lib/agent-session-store.ts         JSONL session persistence and resume
-```
-
-This list is a teaser, not the map. The full, maintained module map lives in
-[`docs/architecture.md`](docs/architecture.md).
-
-`route.ts` should stay thin: read the HTTP request, validate input, call the service, and return
-JSON. The service layer should receive plain TypeScript objects instead of `NextRequest`.
-
-For the current project map and module responsibilities, see
-[`docs/architecture.md`](docs/architecture.md).
-
-For a chaptered walkthrough of how the current agent harness evolved, start at
-the bilingual tutorial hub [`tutorial/README.md`](tutorial/README.md). The
-English path lives at [`tutorial/en/README.md`](tutorial/en/README.md), and the
-Chinese path lives at [`tutorial/zh/README.md`](tutorial/zh/README.md). The
-tutorial explains the design path from the initial Next.js API boundary through
-the streaming sampling loop, real read-only tools, provider dialects, Debug
-Console, JSONL sessions, tool runtime contracts, and loop guardrails.
+MIT — see [LICENSE](LICENSE).
