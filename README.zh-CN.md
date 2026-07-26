@@ -2,6 +2,9 @@
 
 **从裸 OpenAI 兼容 API 起步、从零构建的 coding agent 运行时，外加 25 章教程解释每一条边界为什么落在这里。**
 
+### 📖 在线阅读 → **[learn.liangai.org](https://learn.liangai.org)**
+
+25 章，带全文搜索、中英双语、深色模式。同一份内容在 GitHub 上直接读也是通的：
 [English](README.md) · [中文教程](tutorial/zh/README.md) · [English tutorial](tutorial/en/README.md)
 
 TypeScript · Next.js · 141 个确定性测试 · 不依赖任何 agent 框架、LangChain 或 agent SDK
@@ -31,8 +34,8 @@ TypeScript · Next.js · 141 个确定性测试 · 不依赖任何 agent 框架�
 | 取消边界与运行时事件 | `lib/agent-run-context.ts`、`lib/agent-events.ts` | [05](tutorial/zh/05-streaming-cancellation-and-events.md) |
 | Provider dialect —— OpenAI Chat Completions / Responses、Anthropic Messages | `lib/model-provider-dialect.ts`、`lib/anthropic-messages-mapping.ts` | [08](tutorial/zh/08-provider-dialect-boundary.md) |
 | Provider 中立的 response items（运行时主干） | `lib/agent-response-items.ts` | [09](tutorial/zh/09-response-items-and-runtime-spine.md) |
-| 工具运行时边界、工具契约、strict schema 适配 | `lib/agent-tool-runtime.ts`、`lib/agent-tool-contracts.ts`、`lib/openai-tool-schema.ts` | [06](tutorial/zh/06-tool-runtime-and-permission-skeleton.md) · [13](tutorial/zh/13-tool-output-and-strict-openai-schema.md) · [15](tutorial/zh/15-tool-contract-boundary-and-toy-removal.md) |
-| 权限策略、路径策略、read-before-edit | `lib/agent-permissions.ts`、`lib/agent-path-policy.ts` | [06](tutorial/zh/06-tool-runtime-and-permission-skeleton.md) · [12](tutorial/zh/12-real-readonly-tools.md) |
+| 工具运行时边界、工具契约、strict schema 适配 | `lib/agent-tool-runtime.ts`、`lib/agent-tool-contracts.ts`、`lib/openai-tool-schema.ts` | [06](tutorial/zh/06-tool-runtime/README.md) · [13](tutorial/zh/13-tool-output-and-strict-openai-schema.md) · [15](tutorial/zh/15-tool-contract-boundary-and-toy-removal.md) |
+| 权限策略、路径策略、read-before-edit | `lib/agent-permissions.ts`、`lib/agent-path-policy.ts` | [06](tutorial/zh/06-tool-runtime/README.md) · [12](tutorial/zh/12-real-readonly-tools.md) |
 | shell 工具与安全命令分类器 | `lib/agent-shell-builtins.ts`、`lib/agent-shell-safety.ts` | [18](tutorial/zh/18-shell-tool-and-command-safety.md) |
 | OS 级沙箱 —— macOS `sandbox-exec`、Linux `bwrap`，fail-closed | `lib/agent-shell-sandbox-macos.ts`、`lib/agent-shell-sandbox-linux.ts` | [24](tutorial/zh/24-os-level-sandbox.md) |
 | 审批暂停与恢复 | `lib/agent-approvals.ts` | [19](tutorial/zh/19-approval-pause-and-resume.md) |

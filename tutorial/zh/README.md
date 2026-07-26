@@ -16,7 +16,7 @@ English mirror: [../en/README.md](../en/README.md)
 | [03](03-living-architecture-and-workbench.md) | Living architecture 与 workbench | 让项目在成长过程中持续解释自己。 |
 | [04](04-first-agent-and-observability.md) | 第一个 agent 与 observability | 加入 `/api/agent`、steps、结构化日志和第一条可检查工具链路。 |
 | [05](05-streaming-cancellation-and-events.md) | Streaming、取消与 events | 把 agent 变成 live run，并加入 abort 与内部 runtime events。 |
-| [06](06-tool-runtime-and-permission-skeleton.md) | Tool runtime 与 permission skeleton | 在添加高风险工具前，把执行放进 runtime boundary。 |
+| [06](06-tool-runtime/README.md) | Tool runtime 与 permission skeleton | 在添加高风险工具前，把执行放进 runtime boundary。 |
 | [07](07-jsonl-sessions-and-usage.md) | JSONL sessions 与 usage | 持久化 run，并区分 raw provider usage 和 normalized totals。 |
 | [08](08-provider-dialect-boundary.md) | Provider dialect boundary | 让 OpenAI Chat/Responses 的差异不要泄漏进 agent loop。 |
 | [09](09-response-items-and-runtime-spine.md) | Response items 与 runtime spine | 用 provider-neutral 模型可见 history 替换固定教学 steps。 |

@@ -2,6 +2,9 @@
 
 **A coding-agent runtime built from a bare OpenAI-compatible API — plus a 25-chapter tutorial explaining why every boundary sits where it does.**
 
+### 📖 Read it online → **[learn.liangai.org](https://learn.liangai.org)**
+
+25 chapters, searchable, bilingual, dark mode. The same content also reads fine on GitHub:
 [中文说明](README.zh-CN.md) · [中文教程](tutorial/zh/README.md) · [English tutorial](tutorial/en/README.md)
 
 TypeScript · Next.js · 141 deterministic tests · no agent framework, no LangChain, no agent SDK
