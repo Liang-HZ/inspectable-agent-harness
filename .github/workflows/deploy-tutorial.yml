@@ -1,0 +1,63 @@
+name: 部署教程站到 Cloudflare Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tutorial/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-tutorial.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-tutorial-site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 构建并部署
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建教程站
+        run: npm run docs:build
+
+      # secret 按仓库隔离，首次上线前是空的。缺凭据时跳过部署而不是失败，
+      # 这样"教程站能不能构建"这个检查在配好凭据之前依然有效。见 docs/RUNBOOK.md 第四节。
+      - name: 检查部署凭据
+        id: creds
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CLOUDFLARE_API_TOKEN 未配置，只构建不部署（见 docs/RUNBOOK.md 第四节）"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 部署到 Cloudflare Pages
+        if: steps.creds.outputs.ready == 'true'
+        run: npx wrangler@4 pages deploy tutorial/.vitepress/dist --project-name=learn-liangai --branch=master
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: fe15c2c6bceaa6066bce8cb02965b896
+
+      - name: 冒烟检查
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          sleep 20
+          # 断言产品独有内容，不是断言 HTTP 200：泛解析会让未配置的子域名也返回 200
+          curl -s https://learn.liangai.org/zh/ | grep -q "Inspectable Agent Harness" \
+            && echo "教程站内容正常" \
+            || { echo "learn.liangai.org 返回的不是教程站内容"; exit 1; }

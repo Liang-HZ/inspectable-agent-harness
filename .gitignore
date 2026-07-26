@@ -29,3 +29,7 @@ data/agent-sessions/
 *.njsproj
 *.sln
 *.sw?
+
+# VitePress 教程站构建产物
+tutorial/.vitepress/dist
+tutorial/.vitepress/cache
