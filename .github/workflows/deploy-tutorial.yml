@@ -25,7 +25,11 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 必须和本地生成 package-lock.json 的 npm 大版本一致（Node 24 → npm 11），
+          # 否则 npm ci 会报 "Missing: react@18.3.1 from lock file"：
+          # vitepress 捆绑的 @docsearch/react peer 只到 react 18，两个 npm 大版本对这种
+          # 冲突的落锁方式不同。
+          node-version: 24
           cache: npm
 
       - name: 安装依赖
