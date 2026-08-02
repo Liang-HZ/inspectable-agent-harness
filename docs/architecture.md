@@ -82,7 +82,7 @@ lib/chat-api-client.ts              Browser-side fetch wrapper
 lib/chat-api-types.ts               Shared API request/response types
 app/api/chat/route.ts               HTTP entry point for /api/chat
 lib/chat-input.ts                   Zod request body parsing and validation
-lib/env.ts                          Server-side model configuration
+lib/env.ts                          Server-side model and storage configuration
 lib/openai-compatible-client.ts     OpenAI SDK client creation
 lib/chat.ts                         Chat model service
 app/api/agent/route.ts              HTTP entry point for /api/agent
@@ -488,6 +488,14 @@ Current files are written under:
 data/agent-sessions/YYYY/MM/DD/rollout-{timestamp}-{runId}.jsonl
 ```
 
+The root is resolved per call by `readAgentSessionRootDirectory()` in
+`lib/env.ts`: `AGENT_SESSION_ROOT` overrides it, and a relative value resolves
+against the process working directory. Tests point it at a temp directory, which
+is what keeps a test run from reading transcripts a live run is still appending
+to — a directory scan parses the first line of every file it finds, and the last
+line of an in-flight session file is routinely half-written. The date
+partitioning and file naming are unchanged by the override.
+
 `data/agent-sessions/` is ignored by git because session files can contain user
 input, prompts, tool arguments, model output, and other sensitive runtime data.
 This module is currently used by `/api/agent/stream`; `/api/agent` still runs
@@ -745,6 +753,17 @@ OPENAI_BASE_URL
 OPENAI_MODEL
 OPENAI_WIRE_API=openai-chat-completions | openai-responses
 ```
+
+Runtime storage:
+
+```text
+AGENT_SESSION_ROOT=data/agent-sessions
+```
+
+`readAgentSessionRootDirectory()` resolves this on every store call, so a
+process can relocate the session root after import. The shell tool's read-only
+carveout is the project-relative path `data/agent-sessions`; a root pointed
+outside the project is not covered by it.
 
 ## Agent Shape
 

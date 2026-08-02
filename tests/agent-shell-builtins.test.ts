@@ -342,10 +342,11 @@ test('shell rejects invalid arguments as a validation error', async () => {
 // skip pattern in the test suite.
 //
 // All macOS sandbox checks live in a single test function so they run strictly
-// sequentially. node:test runs files concurrently, and each sandboxed spawn
-// touches the shared `data/agent-sessions/` carveout path; running them as one
-// test shrinks the concurrency window against the session-store tests that
-// also write there.
+// sequentially. node:test runs files concurrently, and each check spawns a real
+// sandboxed bash against the shared project root; keeping them in one test
+// stops those spawns from interleaving with each other. (The session-store
+// tests no longer collide here: they write under a temp AGENT_SESSION_ROOT
+// rather than the `data/agent-sessions/` carveout path.)
 // ---------------------------------------------------------------------------
 
 function skipIfNotDarwin(): boolean {

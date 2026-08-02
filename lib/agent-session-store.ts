@@ -13,6 +13,7 @@ import type { AgentEvent } from './agent-events';
 import type { AgentModelWireApi } from './agent-model-types';
 import type { AgentRunPolicy } from './agent-permissions';
 import type { AgentResponseItem } from './agent-response-items';
+import { readAgentSessionRootDirectory } from './env';
 
 export type AgentSessionSource = 'api_agent_stream';
 
@@ -89,22 +90,20 @@ export type CreateAgentSessionInput = {
   policy: AgentRunPolicy;
 };
 
-const AGENT_SESSION_ROOT = 'data/agent-sessions';
-
 function safeTimestampForFilename(timestamp: string): string {
   return timestamp.replace(/:/g, '-').replace(/\./g, '-');
 }
 
+// The root comes from `readAgentSessionRootDirectory()` (default
+// `<cwd>/data/agent-sessions`, overridable with AGENT_SESSION_ROOT) rather than
+// from a constant here, so a test process can point the whole store at a temp
+// directory instead of reading and writing the real transcripts.
 function sessionDirectory(timestamp: Date): string {
   const year = String(timestamp.getUTCFullYear()).padStart(4, '0');
   const month = String(timestamp.getUTCMonth() + 1).padStart(2, '0');
   const day = String(timestamp.getUTCDate()).padStart(2, '0');
 
-  return join(process.cwd(), AGENT_SESSION_ROOT, year, month, day);
-}
-
-function sessionRootDirectory(): string {
-  return join(process.cwd(), AGENT_SESSION_ROOT);
+  return join(readAgentSessionRootDirectory(), year, month, day);
 }
 
 function createSessionPath(id: string, timestamp: Date): string {
@@ -263,13 +262,15 @@ function createAgentSessionSummary(path: string): AgentSessionSummary {
 }
 
 export function listAgentSessionSummaries(): AgentSessionSummary[] {
-  return listAgentSessionPathsFromDirectory(sessionRootDirectory())
+  return listAgentSessionPathsFromDirectory(readAgentSessionRootDirectory())
     .map((path) => createAgentSessionSummary(path))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 export function findAgentSessionPathById(id: string): string | undefined {
-  const paths = listAgentSessionPathsFromDirectory(sessionRootDirectory());
+  const paths = listAgentSessionPathsFromDirectory(
+    readAgentSessionRootDirectory(),
+  );
 
   for (const path of paths) {
     const metaRecord = readSessionMetaRecord(path);

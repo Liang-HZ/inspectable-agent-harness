@@ -1,3 +1,5 @@
+import { resolve } from 'path';
+
 import * as z from 'zod';
 
 import { AGENT_MODEL_WIRE_APIS } from './agent-model-types';
@@ -32,6 +34,37 @@ type ReadModelConfigResult =
 function readOptionalEnvString(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value === undefined || value === '' ? undefined : value;
+}
+
+/**
+ * Default directory for JSONL session rollouts, relative to the process working
+ * directory. `lib/agent-shell-sandbox-macos.ts` carves out this same
+ * project-relative path as read-only so the model cannot rewrite its own
+ * transcript through the shell tool; the two values must move together.
+ */
+export const DEFAULT_AGENT_SESSION_ROOT = 'data/agent-sessions';
+
+/**
+ * Absolute directory that holds JSONL session rollouts.
+ *
+ * `AGENT_SESSION_ROOT` overrides the default; a relative value resolves against
+ * the process working directory, an absolute value is used as is. Tests point
+ * it at a fresh temp directory so a test run neither reads nor writes the real
+ * transcripts: scanning that directory while a live run appends to a file can
+ * otherwise read a half-written line.
+ *
+ * Read per call rather than once at module load, so a caller that sets the
+ * variable after importing the store still gets the configured root.
+ *
+ * A root outside the project leaves the sandbox carveout above behind: the
+ * shell tool blocks writes to `data/agent-sessions` by project-relative path,
+ * not to wherever this resolves.
+ */
+export function readAgentSessionRootDirectory(): string {
+  return resolve(
+    process.cwd(),
+    readOptionalEnvString('AGENT_SESSION_ROOT') ?? DEFAULT_AGENT_SESSION_ROOT,
+  );
 }
 
 export function readModelConfig(modelOverride?: string): ReadModelConfigResult {

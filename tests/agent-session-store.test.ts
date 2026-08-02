@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
-import { afterEach, test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { after, before, test } from 'node:test';
 
 import { applyAgentHistoryCompaction } from '../lib/agent-compaction';
 import type { AgentResponseItem } from '../lib/agent-response-items';
@@ -9,24 +11,34 @@ import {
   appendAgentResponseItem,
   appendAgentTurnContext,
   createAgentSession,
+  listAgentSessionSummaries,
   normalizeAgentResponseItemHistory,
   resumeAgentSession,
   type AgentSession,
 } from '../lib/agent-session-store';
+import { SANDBOX_READONLY_CARVEOUTS } from '../lib/agent-shell-sandbox';
+import { DEFAULT_AGENT_SESSION_ROOT } from '../lib/env';
 
-const createdSessionPaths: string[] = [];
+// Every store call resolves its root through AGENT_SESSION_ROOT, so pointing it
+// at a fresh temp directory keeps this file out of the real
+// `data/agent-sessions`. Without that, `resumeAgentSession` scans the real
+// directory and parses the first line of every transcript there -- including a
+// session a live dev-server run is appending to, whose last line is routinely
+// half-written. That produced random JSON.parse failures in this suite.
+let sessionRoot = '';
 
-afterEach(async () => {
-  while (createdSessionPaths.length > 0) {
-    const path = createdSessionPaths.pop();
-    if (path !== undefined) {
-      await rm(path, { force: true });
-    }
-  }
+before(async () => {
+  sessionRoot = await mkdtemp(join(tmpdir(), 'agent-session-store-test-'));
+  process.env.AGENT_SESSION_ROOT = sessionRoot;
+});
+
+after(async () => {
+  delete process.env.AGENT_SESSION_ROOT;
+  await rm(sessionRoot, { recursive: true, force: true });
 });
 
 function createTestSession(): AgentSession {
-  const session = createAgentSession({
+  return createAgentSession({
     id: `test-session-${randomUUID()}`,
     cwd: process.cwd(),
     source: 'api_agent_stream',
@@ -39,10 +51,42 @@ function createTestSession(): AgentSession {
       sandboxMode: 'workspace_write',
     },
   });
-  createdSessionPaths.push(session.path);
-
-  return session;
 }
+
+test('a new session file lands under the configured root, partitioned by UTC date', () => {
+  const session = createTestSession();
+
+  const relativePath = relative(sessionRoot, session.path);
+
+  assert.ok(
+    !relativePath.startsWith('..'),
+    `session escaped the configured root: ${session.path}`,
+  );
+  assert.match(
+    relativePath,
+    /^\d{4}[/\\]\d{2}[/\\]\d{2}[/\\]rollout-.+\.jsonl$/,
+  );
+});
+
+test('listAgentSessionSummaries reads only sessions under the configured root', () => {
+  const first = createTestSession();
+  const second = createTestSession();
+
+  const ids = listAgentSessionSummaries().map((summary) => summary.id);
+
+  assert.ok(ids.includes(first.id));
+  assert.ok(ids.includes(second.id));
+  // Nothing from the real session directory leaked into the scan.
+  assert.ok(ids.every((id) => id.startsWith('test-session-')));
+});
+
+// Relocating the default would move transcripts out of the shell tool's
+// read-only carveout, which is what stops the model from rewriting its own
+// audit trail. The carveout is a project-relative path, so it cannot follow an
+// AGENT_SESSION_ROOT pointed elsewhere -- the default at least must match.
+test('the default session root is the path the shell sandbox keeps read-only', () => {
+  assert.ok(SANDBOX_READONLY_CARVEOUTS.includes(DEFAULT_AGENT_SESSION_ROOT));
+});
 
 test('normalizeAgentResponseItemHistory leaves a fully paired history unchanged', () => {
   const items: AgentResponseItem[] = [
