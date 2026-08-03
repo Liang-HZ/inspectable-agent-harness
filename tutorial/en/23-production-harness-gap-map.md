@@ -30,7 +30,7 @@ After reading this chapter, you should understand:
 | Model-call retry | **done**: retryable-error classification + exponential backoff (not after the stream opens) | retryable-error classification + exponential backoff |
 | Provider coverage | **partly done**: Anthropic Messages mapping implemented and tested, not wired to a live client | multiple provider dialects; Anthropic Messages is the real touchstone |
 | MCP | `'mcp'` in the source enum is a placeholder | full discovery/dispatch/lifecycle |
-| Subagents | none | Claude Code's Task tool spawns subtasks |
+| Subagents | **closed**: `task` spawns a child run with its own file and context; depth 2, sequential ([ch. 25](25-tracing-and-subagents/README.md)) | Claude Code's Task tool spawns subtasks, in parallel |
 | Hooks and persistent rules | `hook`/`guardian` decision sources are placeholders; every ask is approved one-off | settings allowlists, "approved for session," hook chains |
 | Prompt caching | passive `cachedInputTokens` accounting only | cache breakpoint control, stable-prefix engineering |
 | Steering | no way to inject a message mid-run; cancel is the only intervention | queue/insert user input while running |
@@ -157,18 +157,29 @@ the attachment point is reserved, so adding it later needs no refactor.
 
 ## 6. Subagents and Task Spawning
 
-**Today**: none, explicitly out of scope. A run is one sampling loop; there
-is no mechanism to spawn subtasks.
+**Today**: closed in [Chapter 25](25-tracing-and-subagents/README.md). The
+`task` tool spawns a full child run with its own context window and its own
+session file (`subagents/agent-<id>.jsonl`), returning only the final answer to
+the parent loop. A child inherits the parent's policy and abort signal but
+**not** its read-before-edit record; its usage rolls up into the parent's
+total; depth is capped at 2, enforced by hiding the `task` tool at the limit
+rather than by failing the call.
 
 **Production**: Claude Code's Task tool spawns subagents with independent
 context to handle subtasks and reports results back to the main loop — in
 essence trading an extra context window for the main conversation's token
 budget.
 
-**Why not here**: subagents are "orchestration of multiple harness
-instances"; introducing that while the single loop is still being polished
-would only dilute the main thread. Revisit after the single loop's
-boundaries (especially steering and retry) are stable.
+**Still missing**: parallelism. `task` is `executionMode: 'sequential'`; the
+batch scheduler only parallelises when every call in a batch is parallel, and
+parallel subagents need a per-run approval queue first — otherwise one child
+waiting on an approval blocks its siblings.
+
+**Why it was deferred**: subagents are "orchestration of multiple harness
+instances"; introducing that while the single loop was still being polished
+would only have diluted the main thread. Waiting turned out to be much cheaper —
+there was exactly one seam to touch (where the tool runtime builds its context),
+and `AgentToolDefinition` needed no change at all.
 
 ## 7. Hooks and Persistent User Rules
 

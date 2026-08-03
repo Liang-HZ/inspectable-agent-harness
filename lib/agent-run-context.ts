@@ -4,6 +4,8 @@ import {
   DEFAULT_AGENT_RUN_POLICY,
   type AgentRunPolicy,
 } from './agent-permissions';
+import { createRootSpanContext, type AgentSpanContext } from './agent-trace';
+import type { AgentSubagentSpawner } from './agent-subagent';
 
 export type AgentApprovalMode = 'interactive' | 'fail_closed';
 
@@ -12,6 +14,19 @@ export type AgentRunContextInput = {
   signal?: AbortSignal;
   policy?: AgentRunPolicy;
   approvalMode?: AgentApprovalMode;
+  /**
+   * The run's root span. Omitted for a top-level run, which starts a fresh
+   * trace. A subagent passes the span derived from its parent's `task` tool
+   * call, which is what stitches the two session files into one waterfall.
+   */
+  span?: AgentSpanContext;
+  /** 0 for a top-level run, incremented for every derived subagent run. */
+  spawnDepth?: number;
+  /**
+   * How this run derives subagents. Absent for runs that cannot — the `task`
+   * tool is then hidden rather than exposed and made to fail.
+   */
+  spawnSubagent?: AgentSubagentSpawner;
 };
 
 export type AgentRunContext = {
@@ -20,6 +35,9 @@ export type AgentRunContext = {
   policy: AgentRunPolicy;
   approvalMode: AgentApprovalMode;
   toolState: AgentRunToolState;
+  span: AgentSpanContext;
+  spawnDepth: number;
+  spawnSubagent: AgentSubagentSpawner | undefined;
 };
 
 export type AgentRunToolState = {
@@ -43,8 +61,14 @@ export function createAgentRunContext(
     policy: policy,
     approvalMode: input.approvalMode ?? 'fail_closed',
     toolState: {
+      // Deliberately not inherited by a subagent: read-before-edit state is a
+      // safety interlock, and a derived run has to earn it by reading the file
+      // itself. See `createSubagentRunContext`.
       readFilePaths: new Set<string>(),
     },
+    span: input.span ?? createRootSpanContext(),
+    spawnDepth: input.spawnDepth ?? 0,
+    spawnSubagent: input.spawnSubagent,
   };
 }
 

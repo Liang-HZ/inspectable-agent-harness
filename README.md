@@ -1,10 +1,10 @@
 # Inspectable Agent Harness
 
-**A coding-agent runtime built from a bare OpenAI-compatible API — plus a 25-chapter tutorial explaining why every boundary sits where it does.**
+**A coding-agent runtime built from a bare OpenAI-compatible API — plus a 26-chapter tutorial explaining why every boundary sits where it does.**
 
 ### 📖 Read it online → **[learn.liangai.org](https://learn.liangai.org)**
 
-25 chapters, searchable, bilingual, dark mode. The same content also reads fine on GitHub:
+26 chapters, searchable, bilingual, dark mode. The same content also reads fine on GitHub:
 [中文说明](README.zh-CN.md) · [中文教程](tutorial/zh/README.md) · [English tutorial](tutorial/en/README.md)
 
 TypeScript · Next.js · 141 deterministic tests · no agent framework, no LangChain, no agent SDK
@@ -38,6 +38,7 @@ It is a **reference harness for reading and learning**, not a production CLI. Ch
 | Permission policy, path policy, read-before-edit | `lib/agent-permissions.ts`, `lib/agent-path-policy.ts` | [06](tutorial/en/06-tool-runtime-and-permission-skeleton.md) · [12](tutorial/en/12-real-readonly-tools.md) |
 | Shell tool behind a safe-command classifier | `lib/agent-shell-builtins.ts`, `lib/agent-shell-safety.ts` | [18](tutorial/en/18-shell-tool-and-command-safety.md) |
 | OS-level sandbox — macOS `sandbox-exec`, Linux `bwrap`, fail-closed | `lib/agent-shell-sandbox-macos.ts`, `lib/agent-shell-sandbox-linux.ts` | [24](tutorial/en/24-os-level-sandbox.md) |
+| Trace waterfall, subagents, vendor-neutral OTLP export | `lib/agent-trace.ts`, `lib/agent-subagent.ts`, `lib/agent-otel-export.ts` | [25](tutorial/en/25-tracing-and-subagents/README.md) |
 | Approval pause and resume | `lib/agent-approvals.ts` | [19](tutorial/en/19-approval-pause-and-resume.md) |
 | JSONL session store, replay, resume | `lib/agent-session-store.ts` | [07](tutorial/en/07-jsonl-sessions-and-usage.md) · [20](tutorial/en/20-session-replay-and-resume.md) |
 | Context compaction | `lib/agent-compaction.ts` | [21](tutorial/en/21-context-compaction.md) |
@@ -64,7 +65,7 @@ npm run typecheck
 
 ## The tutorial
 
-25 chapters, Chinese and English, reconstructed from the project's real evolution — git history, the current workspace, and the trade-offs already baked into the code.
+26 chapters, Chinese and English, reconstructed from the project's real evolution — git history, the current workspace, and the trade-offs already baked into the code.
 
 - **[中文教程](tutorial/zh/README.md)** — chapter map and reading order
 - **[English tutorial](tutorial/en/README.md)**

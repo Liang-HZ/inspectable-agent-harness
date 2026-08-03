@@ -16,6 +16,13 @@ tsconfig.tsbuildinfo
 *.local
 data/agent-sessions/
 
+# Model credentials. `*.local` above already covers .env.local, but .env is the
+# filename .env.example tells you to create — and this repository is public.
+.env
+
+# Local observability credentials, generated from .env.example on first `obs:up`
+docs/observability/.env
+
 # Local Claude Code permission settings (machine-specific, not shared project config)
 .claude/settings.local.json
 

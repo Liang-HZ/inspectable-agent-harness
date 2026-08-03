@@ -32,21 +32,45 @@ import {
   type AgentToolResult,
 } from './agent-tools';
 import { DEFAULT_AGENT_TOOL_TIMEOUT_MS } from './agent-tool-contracts';
+import {
+  createChildSpanContext,
+  createSpanTiming,
+  type AgentSpanContext,
+} from './agent-trace';
+import type { AgentSubagentToolSpawner } from './agent-subagent';
 
 type AgentToolRuntimeCallbacks = {
   onEvent?: (event: AgentEvent) => void;
 };
 
-function createToolStartedEvent(toolCall: AgentModelToolCall): AgentEvent {
+function createToolStartedEvent(
+  toolCall: AgentModelToolCall,
+  span: AgentSpanContext,
+  startedAtMs: number,
+): AgentEvent {
   return {
     type: 'tool_started',
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     argumentsJson: toolCall.argumentsJson,
+    span: span,
+    startedAt: new Date(startedAtMs).toISOString(),
   };
 }
 
-function createToolFinishedEvent(execution: AgentToolExecution): AgentEvent {
+/**
+ * Note that `tool_finished` is also emitted on paths where the tool never ran —
+ * unknown tool, permission denial, approval denial. Those still carry a
+ * well-formed span: a span is a single record with both ends, so a rejected
+ * call shows up in the waterfall as a short bar rather than vanishing. That is
+ * deliberate; "why is nothing here?" is the hardest question to answer from a
+ * trace.
+ */
+function createToolFinishedEvent(
+  execution: AgentToolExecution,
+  span: AgentSpanContext,
+  startedAtMs: number,
+): AgentEvent {
   return {
     type: 'tool_finished',
     toolCallId: execution.toolCallId,
@@ -55,6 +79,9 @@ function createToolFinishedEvent(execution: AgentToolExecution): AgentEvent {
     result: execution.output,
     modelOutput: execution.modelOutput,
     isError: execution.isError,
+    subagentSessionId: execution.subagentSessionId,
+    span: span,
+    timing: createSpanTiming(startedAtMs, Date.now()),
   };
 }
 
@@ -236,10 +263,36 @@ async function waitForInteractiveToolApproval(
   });
 }
 
+/**
+ * Binds the run's subagent spawner to one tool call. The tool itself is never
+ * told its own call id or span — the runtime closes over them here, so `task`
+ * stays a plain tool that asks for a subagent and gets an answer, while the
+ * parent/child join key stays an invariant of the runtime.
+ */
+function bindSubagentSpawner(
+  context: AgentRunContext,
+  toolCall: AgentModelToolCall,
+  toolSpan: AgentSpanContext,
+): AgentSubagentToolSpawner | undefined {
+  const spawnSubagent = context.spawnSubagent;
+
+  if (spawnSubagent === undefined) {
+    return undefined;
+  }
+
+  return (request) =>
+    spawnSubagent({
+      ...request,
+      toolCallId: toolCall.id,
+      parentSpan: toolSpan,
+    });
+}
+
 async function executeToolWithRuntimeLimits(
   toolDefinition: AgentToolDefinition,
   toolCall: AgentModelToolCall,
   context: AgentRunContext,
+  toolSpan: AgentSpanContext,
 ): Promise<AgentToolResult> {
   const timeoutMs = toolDefinition.timeoutMs;
   const toolAbortController = new AbortController();
@@ -317,6 +370,7 @@ async function executeToolWithRuntimeLimits(
             context.policy.sandboxMode,
           ),
           sandboxMode: context.policy.sandboxMode,
+          spawnSubagent: bindSubagentSpawner(context, toolCall, toolSpan),
         },
       ),
     ).then(settleWithResult, settleWithError);
@@ -339,6 +393,7 @@ function createToolExecution(
     modelOutput: modelOutput,
     isError: toolResult.output.type !== 'success',
     durationMs: durationMs,
+    subagentSessionId: toolResult.subagentSessionId,
   };
 }
 
@@ -371,6 +426,10 @@ export async function executeAgentToolCall(
 
   const toolDefinition = agentToolRegistry.get(toolCall.name);
   const startedAt = Date.now();
+  // One span per tool call, hanging off the run's root span. A `task` call
+  // becomes the parent of the subagent run's own root span, which is how a
+  // derived run in a separate session file still lands in this waterfall.
+  const toolSpan = createChildSpanContext(context.span);
 
   if (toolDefinition === undefined) {
     const execution = createErroredToolExecution(
@@ -381,7 +440,7 @@ export async function executeAgentToolCall(
       ),
       Date.now() - startedAt,
     );
-    callbacks.onEvent?.(createToolFinishedEvent(execution));
+    callbacks.onEvent?.(createToolFinishedEvent(execution, toolSpan, startedAt));
 
     return execution;
   }
@@ -410,7 +469,7 @@ export async function executeAgentToolCall(
       ),
       Date.now() - startedAt,
     );
-    callbacks.onEvent?.(createToolFinishedEvent(execution));
+    callbacks.onEvent?.(createToolFinishedEvent(execution, toolSpan, startedAt));
 
     return execution;
   }
@@ -437,14 +496,14 @@ export async function executeAgentToolCall(
         ),
         Date.now() - startedAt,
       );
-      callbacks.onEvent?.(createToolFinishedEvent(execution));
+      callbacks.onEvent?.(createToolFinishedEvent(execution, toolSpan, startedAt));
 
       return execution;
     }
   }
 
   assertAgentRunNotAborted(context);
-  callbacks.onEvent?.(createToolStartedEvent(toolCall));
+  callbacks.onEvent?.(createToolStartedEvent(toolCall, toolSpan, startedAt));
 
   let execution: AgentToolExecution;
   try {
@@ -452,6 +511,7 @@ export async function executeAgentToolCall(
       toolDefinition,
       toolCall,
       context,
+      toolSpan,
     );
     if (toolResult.output.type === 'fatal') {
       throw new AgentToolFatalError(
@@ -490,7 +550,7 @@ export async function executeAgentToolCall(
     permissionRequest,
     execution,
   );
-  callbacks.onEvent?.(createToolFinishedEvent(execution));
+  callbacks.onEvent?.(createToolFinishedEvent(execution, toolSpan, startedAt));
 
   return execution;
 }

@@ -20,7 +20,7 @@
 | 模型调用重试 | **已补**：可重试错误分类 + 指数退避（建流后不重试） | 可重试错误分类 + 指数退避 |
 | Provider 覆盖 | **部分已补**：Anthropic Messages 映射层已实现并测试，未接活客户端 | 多 provider dialect，Anthropic Messages 是真正试金石 |
 | MCP | source 枚举里的 `'mcp'` 是占位 | 完整 discovery/dispatch/lifecycle |
-| Subagent | 无 | Claude Code Task 工具派生子任务 |
+| Subagent | **已补**：`task` 工具派生子 run，独立文件与 context，深度上限 2、串行（[25 章](25-tracing-and-subagents/README.md)） | Claude Code Task 工具派生子任务，可并行 |
 | Hooks 与持久规则 | decision source 里 `hook`/`guardian` 占位；每次 ask 单独批 | settings allowlist、"approved for session"、hook 链 |
 | Prompt caching | 只被动记账 `cachedInputTokens` | cache 断点控制、稳定前缀工程 |
 | Steering | 运行中无法注入新消息，取消是唯一干预 | 运行中排队/插入用户输入 |
@@ -69,11 +69,13 @@
 
 ## 6. Subagent 与任务派生
 
-**现状**：没有，明确范围外。一个 run 就是一个采样循环，没有派生子任务的机制。
+**现状**：[第 25 章](25-tracing-and-subagents/README.md)已补上。`task` 工具派生一个完整的子 run，跑在自己的 context window 和自己的会话文件里（`subagents/agent-<id>.jsonl`），只把最终答案汇回父循环。子 run 继承父的 policy 和 abort signal，但**不**继承 read-before-edit 记录；用量汇总回父账；深度上限 2，靠"到上限就不显示 `task` 工具"实现，而不是调用时报错。
 
 **生产做法**：Claude Code 的 Task 工具可以派生独立上下文的 subagent 处理子任务，结果汇回主循环——本质是用独立 context window 换取主对话的 token 预算。
 
-**为什么不做**：subagent 是"多个 harness 实例的编排"，在单循环还在打磨的阶段引入它只会稀释主线。等单循环的所有边界（尤其 steering 和重试）稳定后再考虑。
+**还差什么**：并行。现在 `task` 是 `executionMode: 'sequential'`，批量调度器只在整批都是 parallel 时才并行，而并行子代理需要审批队列先改成 per-run 的——否则一个子代理弹审批会把兄弟全卡住。
+
+**当初为什么推后**：subagent 是"多个 harness 实例的编排"，在单循环还在打磨的阶段引入它只会稀释主线。等单循环的边界稳定之后再补，事实证明代价确实小得多——真正的接缝只有一处（工具运行时构造上下文的地方），`AgentToolDefinition` 一个字没改。
 
 ## 7. Hooks 与持久化用户规则
 

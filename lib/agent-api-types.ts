@@ -18,6 +18,7 @@ import type {
   AgentSandboxMode,
 } from './agent-permissions';
 import type { AgentResponseItem } from './agent-response-items';
+import type { AgentSpanContext, AgentSpanTiming } from './agent-trace';
 
 export type AgentRequestBody = {
   task: string;
@@ -80,26 +81,43 @@ export type AgentToolDebugRequest = {
   argumentsJson: string;
 };
 
+/**
+ * Span fields travel all the way to the browser: the trace waterfall is drawn
+ * from the live stream, not only from replayed session files. They stay
+ * optional here for the same reason as on `AgentEvent` — a replayed old session
+ * has none.
+ */
+export type AgentDebugSpanStart = {
+  span?: AgentSpanContext;
+  startedAt?: string;
+};
+
+export type AgentDebugSpanEnd = {
+  span?: AgentSpanContext;
+  timing?: AgentSpanTiming;
+};
+
 export type AgentDebugStreamEvent =
-  | {
+  | ({
       type: 'runStarted';
       runId: string;
       sessionId: string;
       resumed: boolean;
       policy: AgentRunPolicy;
-    }
+      spawnDepth?: number;
+    } & AgentDebugSpanStart)
   | {
       type: 'modelStarted';
       stage: AgentModelStage;
     }
-  | {
+  | ({
       type: 'modelRequested';
       round: number;
       model: string;
       wireApi: AgentModelWireApi;
       request: AgentModelRequest;
-    }
-  | {
+    } & AgentDebugSpanStart)
+  | ({
       type: 'modelCompleted';
       round: number;
       model: string;
@@ -107,7 +125,7 @@ export type AgentDebugStreamEvent =
       assistantMessages: AgentModelAssistantMessage[];
       toolCalls: AgentModelToolCall[];
       usage: AgentModelUsageSnapshot;
-    }
+    } & AgentDebugSpanEnd)
   | {
       type: 'historyCommitted';
       items: AgentResponseItem[];
@@ -116,13 +134,13 @@ export type AgentDebugStreamEvent =
       type: 'toolRequested';
       toolRequests: AgentToolDebugRequest[];
     }
-  | {
+  | ({
       type: 'toolStarted';
       toolCallId: string;
       toolName: string;
       argumentsJson: string;
-    }
-  | {
+    } & AgentDebugSpanStart)
+  | ({
       type: 'toolFinished';
       toolCallId: string;
       toolName: string;
@@ -130,7 +148,8 @@ export type AgentDebugStreamEvent =
       result: unknown;
       modelOutput: string;
       isError: boolean;
-    }
+      subagentSessionId?: string;
+    } & AgentDebugSpanEnd)
   | {
       type: 'toolPermissionDecided';
       request: AgentPermissionRequest;

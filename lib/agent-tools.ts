@@ -1,4 +1,8 @@
 import { builtinReadOnlyToolDefinitions } from './agent-builtins';
+import {
+  builtinSubagentToolDefinitions,
+  MAX_SUBAGENT_SPAWN_DEPTH,
+} from './agent-subagent';
 import { builtinEditingToolDefinitions as editingBuiltinDefinitions } from './agent-editing-builtins';
 import { builtinShellToolDefinitions as shellBuiltinDefinitions } from './agent-shell-builtins';
 import type { AgentModelToolDefinition } from './agent-model-types';
@@ -20,7 +24,8 @@ export type {
   AgentToolResult,
 } from './agent-tool-contracts';
 
-export const builtinUtilityToolDefinitions: AgentToolDefinition[] = [];
+export const builtinUtilityToolDefinitions: AgentToolDefinition[] =
+  builtinSubagentToolDefinitions;
 
 export const builtinEditingToolDefinitions: AgentToolDefinition[] =
   editingBuiltinDefinitions;
@@ -61,12 +66,20 @@ export const agentToolRegistry = new Map<string, AgentToolDefinition>(
   ]),
 );
 
-function isToolVisibleForRunPolicy(
+export type AgentToolVisibility = {
+  policy: AgentRunPolicy;
+  /** 0 for a top-level run; a subagent passes its own depth. */
+  spawnDepth?: number;
+  /** False when the run has no way to derive subagents. */
+  canSpawnSubagents?: boolean;
+};
+
+function isToolVisibleForRun(
   toolDefinition: AgentToolDefinition,
-  policy: AgentRunPolicy,
+  visibility: AgentToolVisibility,
 ): boolean {
   if (toolDefinition.group === 'editing_builtins') {
-    return policy.sandboxMode !== 'read_only';
+    return visibility.policy.sandboxMode !== 'read_only';
   }
 
   if (toolDefinition.group === 'shell_builtins') {
@@ -75,22 +88,35 @@ function isToolVisibleForRunPolicy(
     return true;
   }
 
+  if (toolDefinition.name === 'task') {
+    // Hidden rather than exposed-and-failing. A tool the model cannot see is a
+    // boundary it cannot spend a round arguing with, and at the depth limit the
+    // answer would always be no.
+    return (
+      (visibility.canSpawnSubagents ?? false) &&
+      (visibility.spawnDepth ?? 0) < MAX_SUBAGENT_SPAWN_DEPTH
+    );
+  }
+
   return true;
 }
 
 export function getAgentToolDefinitionsForRunPolicy(
-  policy: AgentRunPolicy,
+  visibility: AgentRunPolicy | AgentToolVisibility,
 ): AgentToolDefinition[] {
+  const resolved: AgentToolVisibility =
+    'policy' in visibility ? visibility : { policy: visibility };
+
   return agentToolDefinitions.filter((toolDefinition) =>
-    isToolVisibleForRunPolicy(toolDefinition, policy),
+    isToolVisibleForRun(toolDefinition, resolved),
   );
 }
 
 export function getAgentToolsForRunPolicy(
-  policy: AgentRunPolicy,
+  visibility: AgentRunPolicy | AgentToolVisibility,
 ): AgentModelToolDefinition[] {
   return toolDefinitionsToModelTools(
-    getAgentToolDefinitionsForRunPolicy(policy),
+    getAgentToolDefinitionsForRunPolicy(visibility),
   );
 }
 

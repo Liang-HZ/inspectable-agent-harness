@@ -580,6 +580,245 @@ pre {
   line-height: 1.45;
 }
 
+/* Trace waterfall.
+   Only existing design tokens are used, so the dark-mode block that redefines
+   them further down covers this panel without a second set of rules. */
+.waterfall {
+  display: grid;
+  padding: 6px 0;
+}
+
+.waterfallHeader {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 14px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.waterfallWarning {
+  color: var(--warning-text);
+}
+
+.waterfallRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 260px) minmax(0, 1fr) 96px;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding: 5px 14px;
+}
+
+.waterfallRow:last-child {
+  border-bottom: 0;
+}
+
+.waterfallLabel {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.waterfallKind {
+  flex: none;
+  border: 1px solid var(--accent-tint-border);
+  border-radius: 999px;
+  background: var(--accent-tint-bg);
+  padding: 1px 6px;
+  color: var(--accent-text);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.waterfallKind-subagent {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.waterfallName {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.waterfallTrack {
+  min-width: 0;
+  border-radius: 999px;
+  background: var(--surface-tint);
+  height: 12px;
+}
+
+.waterfallBar {
+  border-radius: 999px;
+  background: var(--accent);
+  height: 12px;
+}
+
+.waterfallBar-tool {
+  background: var(--accent-text);
+}
+
+.waterfallBar-subagent {
+  background: var(--warning-dot);
+}
+
+.waterfallBar-error {
+  background: var(--danger);
+}
+
+/* A span that never closed: striped rather than solid, so "still running" does
+   not read as "took this long". */
+.waterfallBar-open {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.45) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.waterfallMeta {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.waterfallTokens {
+  color: var(--text-secondary);
+}
+
+/* Observability backend status and controls. */
+.obsPanel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.obsPanelHeader {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.obsPanelHeader strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.obsHint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.obsBackendList {
+  display: grid;
+  gap: 6px;
+}
+
+.obsBackend {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-tint);
+  padding: 7px 10px;
+}
+
+.obsDot {
+  flex: none;
+  border-radius: 999px;
+  width: 8px;
+  height: 8px;
+}
+
+.obsDot-ready {
+  background: var(--success);
+}
+
+.obsDot-starting {
+  background: var(--warning-dot);
+}
+
+.obsDot-stopped {
+  background: var(--disabled-bg);
+}
+
+.obsBackendName {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.obsBackendMeta {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.obsLink {
+  color: var(--accent-text);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.obsLinkDisabled {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.obsStopButton,
+.obsExportButton,
+.obsRefresh {
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  padding: 4px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.obsStopButton {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.obsStopButton:disabled,
+.obsExportButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.obsRefresh {
+  justify-self: start;
+}
+
+.obsResult {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.obsResultError {
+  color: var(--danger);
+}
+
 .jsonBlock {
   max-height: 260px;
   margin-top: 10px;

@@ -18,6 +18,7 @@ import type {
   AgentPermissionRequest,
   AgentRunPolicy,
 } from './agent-permissions';
+import type { AgentSpanContext, AgentSpanTiming } from './agent-trace';
 
 export type AgentRunStatus =
   | 'running'
@@ -34,14 +35,35 @@ export type AgentToolRequestEvent = {
   argumentsJson: string;
 };
 
+/**
+ * Span fields are optional on every event because session files written before
+ * tracing existed have none. Anything that reads persisted records has to
+ * degrade when they are absent — the waterfall simply cannot be drawn for an
+ * old run. Live emitters always populate them; that is enforced by tests rather
+ * than by the type, so that the type stays honest about what is on disk.
+ */
+export type AgentEventSpanFields = {
+  span?: AgentSpanContext;
+};
+
+export type AgentEventSpanStart = AgentEventSpanFields & {
+  startedAt?: string;
+};
+
+export type AgentEventSpanEnd = AgentEventSpanFields & {
+  timing?: AgentSpanTiming;
+};
+
 export type AgentEvent =
-  | {
+  | ({
       type: 'run_started';
       runId: string;
       sessionId: string;
       resumed: boolean;
       policy: AgentRunPolicy;
-    }
+      /** 0 for a top-level run; > 0 identifies a derived subagent run. */
+      spawnDepth?: number;
+    } & AgentEventSpanStart)
   | {
       type: 'step_created';
       step: AgentStep;
@@ -50,14 +72,14 @@ export type AgentEvent =
       type: 'model_started';
       stage: AgentModelStage;
     }
-  | {
+  | ({
       type: 'model_requested';
       round: number;
       model: string;
       wireApi: AgentModelWireApi;
       request: AgentModelRequest;
-    }
-  | {
+    } & AgentEventSpanStart)
+  | ({
       type: 'model_completed';
       round: number;
       model: string;
@@ -65,7 +87,7 @@ export type AgentEvent =
       assistantMessages: AgentModelAssistantMessage[];
       toolCalls: AgentModelToolCall[];
       usage: AgentModelUsageSnapshot;
-    }
+    } & AgentEventSpanEnd)
   | {
       type: 'assistant_delta';
       delta: string;
@@ -74,13 +96,13 @@ export type AgentEvent =
       type: 'tool_requested';
       toolRequests: AgentToolRequestEvent[];
     }
-  | {
+  | ({
       type: 'tool_started';
       toolCallId: string;
       toolName: string;
       argumentsJson: string;
-    }
-  | {
+    } & AgentEventSpanStart)
+  | ({
       type: 'tool_finished';
       toolCallId: string;
       toolName: string;
@@ -88,7 +110,14 @@ export type AgentEvent =
       result: unknown;
       modelOutput: string;
       isError: boolean;
-    }
+      /**
+       * Set when the tool call spawned a subagent: points at the session file
+       * holding that derived run. This is the on-disk half of the parent/child
+       * link — the span half is `span.parentSpanId` on the subagent's
+       * `run_started`.
+       */
+      subagentSessionId?: string;
+    } & AgentEventSpanEnd)
   | {
       type: 'tool_permission_decided';
       request: AgentPermissionRequest;

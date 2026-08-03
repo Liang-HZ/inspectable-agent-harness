@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 import type {
   AgentModelCallUsage,
   AgentDebugStreamEvent,
@@ -28,10 +30,17 @@ import {
   appendAgentSessionEvent,
   appendAgentTurnContext,
   createAgentSession,
+  createSubagentSession,
   resumeAgentSession,
   type AgentSession,
 } from './agent-session-store';
+import type { AgentSubagentSpawner } from './agent-subagent';
 import { logAgentEvent, logAgentInfo, logAgentStep } from './agent-log';
+import {
+  createChildSpanContext,
+  createSpanTiming,
+  type AgentSpanContext,
+} from './agent-trace';
 import { executeAgentToolBatch } from './agent-tool-scheduler';
 import { getAgentToolsForRunPolicy } from './agent-tools';
 import type { AgentToolExecution, AgentToolExecutionMode } from './agent-tools';
@@ -444,10 +453,16 @@ async function runSamplingRound(
   history: AgentResponseItem[],
   round: number,
   emitAgentEvent: ((event: AgentEvent) => void) | undefined,
+  modelSpan: AgentSpanContext,
+  startedAtMs: number,
 ): Promise<SamplingRoundResult> {
   const request: AgentModelRequest = {
     messages: responseItemsToModelMessages(history),
-    tools: getAgentToolsForRunPolicy(context.policy),
+    tools: getAgentToolsForRunPolicy({
+      policy: context.policy,
+      spawnDepth: context.spawnDepth,
+      canSpawnSubagents: context.spawnSubagent !== undefined,
+    }),
     toolChoice: 'auto',
     temperature: input.temperature,
   };
@@ -458,6 +473,8 @@ async function runSamplingRound(
     model: modelGateway.model,
     wireApi: modelGateway.wireApi,
     request: request,
+    span: modelSpan,
+    startedAt: new Date(startedAtMs).toISOString(),
   });
 
   const stream = await modelGateway.streamResponse(request);
@@ -584,6 +601,12 @@ export async function runSamplingLoop(
       stage: 'tool_or_answer_selection',
     });
 
+    // One span per sampling round, opened here rather than inside
+    // `runSamplingRound` so that the request and the completion — emitted from
+    // two different functions — carry the same span id.
+    const modelSpan = createChildSpanContext(context.span);
+    const modelStartedAt = Date.now();
+
     const roundResult = await runSamplingRound(
       modelGateway,
       input,
@@ -591,6 +614,8 @@ export async function runSamplingLoop(
       history,
       round,
       emitAgentEvent,
+      modelSpan,
+      modelStartedAt,
     );
     emitAgentEvent?.({
       type: 'model_completed',
@@ -600,6 +625,8 @@ export async function runSamplingLoop(
       assistantMessages: roundResult.assistantMessages,
       toolCalls: roundResult.toolCalls,
       usage: roundResult.usage,
+      span: modelSpan,
+      timing: createSpanTiming(modelStartedAt, Date.now()),
     });
     assertNoIncompleteToolCall(roundResult);
     assertCommittedAssistantMessage(roundResult);
@@ -702,6 +729,149 @@ export async function runSamplingLoop(
   }
 }
 
+type SubagentSpawnerInput = {
+  parentContext: AgentRunContext;
+  parentSession: AgentSession;
+  parentSessionId: string;
+  config: ModelConfig;
+  input: AgentInput;
+  systemMessage: string;
+  /** The parent's usage accumulator; a child's model calls are rolled up here. */
+  parentModelCallUsages: AgentModelCallUsage[];
+  /** The live browser stream, or undefined for a non-streaming run. */
+  forwardEvent: ((event: AgentEvent) => void) | undefined;
+};
+
+/**
+ * Builds the capability that turns a `task` tool call into a real derived run.
+ *
+ * Three things make a subagent a subagent rather than a nested function call:
+ *
+ * 1. *Its own session file.* A derived run has an independent context window,
+ *    so folding its transcript into the parent's would corrupt the parent's
+ *    replay. Its events persist to `subagents/agent-<id>.jsonl`.
+ * 2. *The parent's live stream, all the same.* Persistence and presentation are
+ *    different questions: the browser still wants to watch the child work, so
+ *    events are forwarded to the parent's stream even though they are stored
+ *    elsewhere. Their span parentage is what keeps them in the right place in
+ *    the waterfall.
+ * 3. *The parent's abort signal.* A cancelled parent must not leave a child
+ *    running; inheriting the signal is what makes cancellation transitive.
+ */
+function createSubagentSpawner(
+  spawnerInput: SubagentSpawnerInput,
+): AgentSubagentSpawner {
+  return async (request) => {
+    const agentId = randomUUID();
+    const spawnDepth = spawnerInput.parentContext.spawnDepth + 1;
+    const session = createSubagentSession({
+      parentSession: spawnerInput.parentSession,
+      parentSessionId: spawnerInput.parentSessionId,
+      agentId: agentId,
+      agentType: request.agentType,
+      description: request.description,
+      toolCallId: request.toolCallId,
+      spawnDepth: spawnDepth,
+      cwd: process.cwd(),
+      source: 'api_agent_stream',
+      modelProvider: 'openai_compatible',
+      model: spawnerInput.config.model,
+      baseURL: spawnerInput.config.baseURL,
+      wireApi: spawnerInput.config.wireApi,
+      policy: spawnerInput.parentContext.policy,
+    });
+
+    const context = createAgentRunContext({
+      runId: agentId,
+      // Inheriting the parent's signal is what makes cancellation transitive.
+      signal: spawnerInput.parentContext.signal,
+      policy: spawnerInput.parentContext.policy,
+      approvalMode: spawnerInput.parentContext.approvalMode,
+      // The subagent's root span hangs off the `task` tool call's span, which
+      // is how a run in a different file lands inside the parent's waterfall.
+      span: createChildSpanContext(request.parentSpan),
+      spawnDepth: spawnDepth,
+    });
+    // Wired after construction so the child can spawn in turn; the depth limit
+    // is enforced by tool visibility, not by withholding the capability.
+    context.spawnSubagent = createSubagentSpawner({
+      ...spawnerInput,
+      parentContext: context,
+      parentSession: session,
+      parentSessionId: agentId,
+    });
+
+    function emitSubagentEvent(event: AgentEvent): void {
+      appendAgentSessionEvent(session, event);
+      spawnerInput.forwardEvent?.(event);
+      logAgentEvent(context.runId, event);
+    }
+
+    emitSubagentEvent({
+      type: 'run_started',
+      runId: context.runId,
+      sessionId: agentId,
+      resumed: false,
+      policy: context.policy,
+      span: context.span,
+      spawnDepth: spawnDepth,
+      startedAt: new Date().toISOString(),
+    });
+
+    const modelGateway = createAgentModelGateway(spawnerInput.config, context);
+    const history = createInitialResponseItems(
+      request.prompt,
+      spawnerInput.systemMessage,
+    );
+    const steps: AgentStep[] = [];
+    const modelCallUsages: AgentModelCallUsage[] = [];
+
+    appendExistingResponseItemsToSession(history, session);
+
+    try {
+      const samplingResult = await runSamplingLoop(
+        modelGateway,
+        spawnerInput.input,
+        context,
+        history,
+        steps,
+        modelCallUsages,
+        session,
+        emitSubagentEvent,
+        undefined,
+      );
+
+      emitSubagentEvent({
+        type: 'run_succeeded',
+        result: {
+          model: samplingResult.model,
+          answer: samplingResult.answer,
+          steps: steps,
+          usage: createAgentUsage(modelCallUsages),
+        },
+      });
+
+      return {
+        sessionId: agentId,
+        agentId: agentId,
+        answer: samplingResult.answer,
+        spawnDepth: spawnDepth,
+      };
+    } catch (error) {
+      emitSubagentEvent({
+        type: 'run_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    } finally {
+      // Roll the child's model calls into the parent's total. Without this a
+      // run that delegates most of its work would report a token bill far
+      // smaller than the one that actually arrives.
+      spawnerInput.parentModelCallUsages.push(...modelCallUsages);
+    }
+  };
+}
+
 export async function runAgent(
   input: AgentInput,
   config: ModelConfig,
@@ -801,6 +971,22 @@ export async function runAgentStream(
   const steps: AgentStep[] = [];
   const modelCallUsages: AgentModelCallUsage[] = [];
 
+  // Attached only now, because a spawner needs the session handle that
+  // `initializeAgentSessionForStream` just produced. Until this line the run
+  // has no way to derive subagents, and `task` is correspondingly invisible.
+  context.spawnSubagent = createSubagentSpawner({
+    parentContext: context,
+    parentSession: session,
+    parentSessionId: sessionId,
+    config: config,
+    input: input,
+    systemMessage: systemMessage ?? AGENT_SYSTEM_MESSAGE,
+    parentModelCallUsages: modelCallUsages,
+    // Subagent events persist to the child's own file, but still reach the
+    // browser through the parent's stream so the waterfall fills in live.
+    forwardEvent: callbacks.onEvent,
+  });
+
   function emitAgentEvent(event: AgentEvent): void {
     appendAgentSessionEvent(session, event);
     runState = applyAgentEvent(runState, event);
@@ -819,6 +1005,9 @@ export async function runAgentStream(
     sessionId: sessionId,
     resumed: resumed,
     policy: context.policy,
+    span: context.span,
+    spawnDepth: context.spawnDepth,
+    startedAt: new Date().toISOString(),
   });
 
   try {

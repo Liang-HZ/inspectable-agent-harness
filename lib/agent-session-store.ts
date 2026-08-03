@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  writeFileSync,
 } from 'fs';
 import { join, relative } from 'path';
 
@@ -46,6 +47,23 @@ export type AgentSessionMeta = {
   baseURL: string;
   wireApi?: AgentModelWireApi;
   policy: AgentRunPolicy;
+  /**
+   * Present only on a subagent session. Named after Claude Code's own session
+   * files, which mark derived runs with `isSidechain: true` and join them back
+   * to the parent through the id of the tool call that spawned them.
+   */
+  sidechain?: AgentSidechainMeta;
+};
+
+export type AgentSidechainMeta = {
+  isSidechain: true;
+  agentId: string;
+  agentType: string;
+  description: string;
+  /** The parent's `task` tool call id — the join key back to the parent run. */
+  toolCallId: string;
+  parentSessionId: string;
+  spawnDepth: number;
 };
 
 export type AgentTurnContext = {
@@ -89,6 +107,24 @@ export type CreateAgentSessionInput = {
   wireApi: AgentModelWireApi;
   policy: AgentRunPolicy;
 };
+
+/**
+ * Sidecar directory names, kept next to a session file under a directory named
+ * after it (the file name minus `.jsonl`). Same layout Claude Code uses:
+ *
+ *   rollout-<ts>-<id>.jsonl
+ *   rollout-<ts>-<id>/subagents/agent-<agentId>.jsonl
+ *   rollout-<ts>-<id>/subagents/agent-<agentId>.meta.json
+ *
+ * A subagent gets its own file rather than interleaved records in the parent's,
+ * because it runs on an independent context window — folding its history into
+ * the parent would corrupt the parent's replay.
+ *
+ * This is a name, not a root: subagent paths are derived from the parent
+ * session's own path, so they follow `readAgentSessionRootDirectory()` wherever
+ * it points — including a test's temp directory.
+ */
+const SUBAGENTS_DIRECTORY = 'subagents';
 
 function safeTimestampForFilename(timestamp: string): string {
   return timestamp.replace(/:/g, '-').replace(/\./g, '-');
@@ -153,6 +189,141 @@ export function createAgentSession(
   });
 
   return session;
+}
+
+/** The sidecar directory for a session: its own path with `.jsonl` removed. */
+function sessionSidecarDirectory(sessionPath: string): string {
+  return sessionPath.replace(/\.jsonl$/, '');
+}
+
+export function subagentsDirectory(sessionPath: string): string {
+  return join(sessionSidecarDirectory(sessionPath), SUBAGENTS_DIRECTORY);
+}
+
+export type CreateSubagentSessionInput = {
+  parentSession: AgentSession;
+  parentSessionId: string;
+  agentId: string;
+  agentType: string;
+  description: string;
+  toolCallId: string;
+  spawnDepth: number;
+  cwd: string;
+  source: AgentSessionSource;
+  modelProvider: string;
+  model: string;
+  baseURL: string;
+  wireApi: AgentModelWireApi;
+  policy: AgentRunPolicy;
+};
+
+/**
+ * Opens a session file for a derived subagent run, next to its parent.
+ *
+ * The `.meta.json` sidecar duplicates what is already in the first JSONL record
+ * on purpose: it lets a reader enumerate a run's children by listing a
+ * directory and parsing tiny files, without opening (possibly very large)
+ * transcripts.
+ */
+export function createSubagentSession(
+  input: CreateSubagentSessionInput,
+): AgentSession {
+  const timestampText = new Date().toISOString();
+  const directory = subagentsDirectory(input.parentSession.path);
+  const path = join(directory, `agent-${input.agentId}.jsonl`);
+
+  mkdirSync(directory, { recursive: true });
+
+  const session = {
+    id: input.agentId,
+    path: path,
+  } satisfies AgentSession;
+
+  appendAgentSessionRecord(session, {
+    timestamp: timestampText,
+    type: 'session_meta',
+    payload: {
+      id: input.agentId,
+      timestamp: timestampText,
+      cwd: input.cwd,
+      source: input.source,
+      modelProvider: input.modelProvider,
+      model: input.model,
+      baseURL: input.baseURL,
+      wireApi: input.wireApi,
+      policy: input.policy,
+      sidechain: {
+        isSidechain: true,
+        agentId: input.agentId,
+        agentType: input.agentType,
+        description: input.description,
+        toolCallId: input.toolCallId,
+        parentSessionId: input.parentSessionId,
+        spawnDepth: input.spawnDepth,
+      },
+    },
+  });
+
+  writeFileSync(
+    join(directory, `agent-${input.agentId}.meta.json`),
+    `${JSON.stringify({
+      agentId: input.agentId,
+      agentType: input.agentType,
+      description: input.description,
+      toolCallId: input.toolCallId,
+      parentSessionId: input.parentSessionId,
+      spawnDepth: input.spawnDepth,
+      timestamp: timestampText,
+    })}\n`,
+    { encoding: 'utf8' },
+  );
+
+  return session;
+}
+
+export type AgentSubagentSessionSummary = {
+  agentId: string;
+  agentType: string;
+  description: string;
+  toolCallId: string;
+  spawnDepth: number;
+  path: string;
+  relativePath: string;
+};
+
+/**
+ * Lists the subagent runs spawned directly by `sessionPath`, read from the
+ * `.meta.json` sidecars rather than from the transcripts themselves.
+ */
+export function listSubagentSessionSummaries(
+  sessionPath: string,
+): AgentSubagentSessionSummary[] {
+  const directory = subagentsDirectory(sessionPath);
+
+  if (!existsSync(directory)) {
+    return [];
+  }
+
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.meta.json'))
+    .map((entry) => {
+      const metaPath = join(directory, entry.name);
+      const meta = JSON.parse(
+        readFileSync(metaPath, { encoding: 'utf8' }),
+      ) as Omit<AgentSubagentSessionSummary, 'path' | 'relativePath'>;
+      const path = metaPath.replace(/\.meta\.json$/, '.jsonl');
+
+      return {
+        agentId: meta.agentId,
+        agentType: meta.agentType,
+        description: meta.description,
+        toolCallId: meta.toolCallId,
+        spawnDepth: meta.spawnDepth,
+        path: path,
+        relativePath: relative(process.cwd(), path),
+      };
+    })
+    .sort((left, right) => left.agentId.localeCompare(right.agentId));
 }
 
 export function appendAgentTurnContext(
@@ -225,6 +396,15 @@ function listAgentSessionPathsFromDirectory(directory: string): string[] {
     const path = join(directory, entry.name);
 
     if (entry.isDirectory()) {
+      // Never descend into a `subagents/` sidecar. Those transcripts are real
+      // session files, so without this they would be listed as if they were
+      // top-level runs — and a subagent would show up in the session list as a
+      // sibling of the run that spawned it. Children are reached deliberately,
+      // through `listSubagentSessionSummaries`.
+      if (entry.name === SUBAGENTS_DIRECTORY) {
+        continue;
+      }
+
       paths.push(...listAgentSessionPathsFromDirectory(path));
       continue;
     }

@@ -1,6 +1,21 @@
 import type { AgentStreamEvent } from './agent-api-types';
 import type { AgentEvent } from './agent-events';
 
+/**
+ * Spreads only the trace fields that are actually set.
+ *
+ * An event replayed from a session file written before tracing existed carries
+ * no span, and for those the projection has to produce exactly what it produced
+ * before — otherwise every consumer downstream would have to learn to ignore an
+ * explicit `span: undefined`, and the old on-the-wire contract would quietly
+ * change for every existing session.
+ */
+function definedTraceFields<T extends object>(fields: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+}
+
 export function projectAgentEventToStreamEvent(
   event: AgentEvent,
 ): AgentStreamEvent | undefined {
@@ -26,6 +41,11 @@ export function projectAgentEventToStreamEvent(
           sessionId: event.sessionId,
           resumed: event.resumed,
           policy: event.policy,
+          ...definedTraceFields({
+            spawnDepth: event.spawnDepth,
+            span: event.span,
+            startedAt: event.startedAt,
+          }),
         },
       };
 
@@ -47,6 +67,10 @@ export function projectAgentEventToStreamEvent(
           model: event.model,
           wireApi: event.wireApi,
           request: event.request,
+          ...definedTraceFields({
+            span: event.span,
+            startedAt: event.startedAt,
+          }),
         },
       };
 
@@ -61,6 +85,10 @@ export function projectAgentEventToStreamEvent(
           assistantMessages: event.assistantMessages,
           toolCalls: event.toolCalls,
           usage: event.usage,
+          ...definedTraceFields({
+            span: event.span,
+            timing: event.timing,
+          }),
         },
       };
 
@@ -81,6 +109,10 @@ export function projectAgentEventToStreamEvent(
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           argumentsJson: event.argumentsJson,
+          ...definedTraceFields({
+            span: event.span,
+            startedAt: event.startedAt,
+          }),
         },
       };
 
@@ -95,6 +127,11 @@ export function projectAgentEventToStreamEvent(
           result: event.result,
           modelOutput: event.modelOutput,
           isError: event.isError,
+          ...definedTraceFields({
+            subagentSessionId: event.subagentSessionId,
+            span: event.span,
+            timing: event.timing,
+          }),
         },
       };
 
