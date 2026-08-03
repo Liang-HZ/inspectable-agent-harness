@@ -39,7 +39,7 @@ test('tool groups expose current builtin surface', () => {
     ]),
   );
 
-  assert.deepEqual(toolsByGroup.utility_builtins, []);
+  assert.deepEqual(toolsByGroup.utility_builtins, ['task']);
   assert.deepEqual(toolsByGroup.read_only_builtins, [
     'read',
     'grep',

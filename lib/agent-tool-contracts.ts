@@ -6,6 +6,8 @@ import type {
 } from './agent-permissions';
 import type { AgentToolOutput } from './agent-tool-output';
 import type { AgentToolPathAccessPolicy } from './agent-path-policy';
+// Type-only, so the cycle with `agent-subagent.ts` is erased at compile time.
+import type { AgentSubagentToolSpawner } from './agent-subagent';
 
 export const DEFAULT_AGENT_TOOL_TIMEOUT_MS = 10_000;
 
@@ -35,6 +37,8 @@ export type AgentToolPermissionInput = {
 export type AgentToolResult = {
   input: unknown;
   output: AgentToolOutput;
+  /** Set only by `task`; see `AgentToolExecution.subagentSessionId`. */
+  subagentSessionId?: string;
 };
 
 export type AgentToolDefinition = {
@@ -62,6 +66,11 @@ export type AgentToolDefinition = {
 
 export type AgentToolRuntimeContext = {
   pathAccess: AgentToolPathAccessPolicy;
+  /**
+   * Present only while executing a tool call in a run that can derive
+   * subagents, already bound to that call's id and span. Only `task` reads it.
+   */
+  spawnSubagent?: AgentSubagentToolSpawner;
   // The run sandbox mode, consumed by the shell tool to decide how to wrap
   // `bash -c` in an OS-level sandbox (sandbox-exec on macOS, bwrap on Linux).
   // Optional because only the shell tool reads it; other tools ignore it.
@@ -83,6 +92,12 @@ export type AgentToolExecution = {
   modelOutput: string;
   isError: boolean;
   durationMs: number;
+  /**
+   * Set only by the `task` tool: the session id of the subagent run it spawned.
+   * Carried here so the tool runtime can put it on `tool_finished` without the
+   * runtime needing to know that subagents exist.
+   */
+  subagentSessionId?: string;
 };
 
 export function toolDefinitionsToModelTools(

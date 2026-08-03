@@ -11,6 +11,10 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { AgentTraceWaterfall } from './agent-trace-waterfall';
+import { ObservabilityPanel } from './observability-panel';
+import { buildAgentTraceTree } from '../lib/agent-trace-tree';
+
 import {
   requestAgentRunStream,
   submitAgentApprovalDecision,
@@ -545,18 +549,24 @@ function workbenchReducer(
 
     case 'agentSubmitFinished':
       if (state.agentView.status !== 'streaming') {
+        // Carry the events over rather than clearing them. A run that paused
+        // for approval is no longer `streaming` by the time it finishes, and
+        // clearing here threw away the entire runtime event stream at exactly
+        // the moment there was something to look at — leaving the trace and
+        // the debug console empty for every approved run. `agentSubmitStarted`
+        // is the only place a reset belongs.
         return {
           ...state,
           agentView: action.response.ok
             ? {
                 status: 'success',
                 response: action.response,
-                debugEvents: [],
+                debugEvents: agentViewDebugEvents(state.agentView),
               }
             : {
                 status: 'error',
                 response: action.response,
-                debugEvents: [],
+                debugEvents: agentViewDebugEvents(state.agentView),
               },
         };
       }
@@ -2526,6 +2536,15 @@ function AgentRunView({
         <AgentApprovalBar pendingApprovals={view.pendingApprovals} />
       ) : null}
       <AgentTranscript view={view} events={events} />
+      {/* Open by default: the whole point of this panel is that you see the
+          call chain the moment a run produces one, without a click. */}
+      <details className="stepShelf" open>
+        <summary>
+          <span>Trace</span>
+          <strong>{buildAgentTraceTree(events).spanCount}</strong>
+        </summary>
+        <AgentTraceWaterfall events={events} />
+      </details>
       <details className="stepShelf">
         <summary>
           <span>Run details</span>
@@ -2943,6 +2962,11 @@ export function ChatPlayground() {
             }
           />
         ) : null}
+        {/* In the sidebar rather than inside the run's trace panel: stopping
+            the backends must not require having a run on screen first. The
+            per-run export buttons disable themselves when there is no session
+            to send. */}
+        <ObservabilityPanel sessionId={currentSessionId} />
       </aside>
 
       <section className="conversationColumn">

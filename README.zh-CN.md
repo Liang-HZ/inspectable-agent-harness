@@ -1,10 +1,10 @@
 # Inspectable Agent Harness
 
-**从裸 OpenAI 兼容 API 起步、从零构建的 coding agent 运行时，外加 25 章教程解释每一条边界为什么落在这里。**
+**从裸 OpenAI 兼容 API 起步、从零构建的 coding agent 运行时，外加 26 章教程解释每一条边界为什么落在这里。**
 
 ### 📖 在线阅读 → **[learn.liangai.org](https://learn.liangai.org)**
 
-25 章，带全文搜索、中英双语、深色模式。同一份内容在 GitHub 上直接读也是通的：
+26 章，带全文搜索、中英双语、深色模式。同一份内容在 GitHub 上直接读也是通的：
 [English](README.md) · [中文教程](tutorial/zh/README.md) · [English tutorial](tutorial/en/README.md)
 
 TypeScript · Next.js · 141 个确定性测试 · 不依赖任何 agent 框架、LangChain 或 agent SDK
@@ -64,7 +64,7 @@ npm run typecheck
 
 ## 教程
 
-25 章，中英双语，按项目真实演化路径重建——依据 git 历史、当前工作区，以及已经沉淀进代码的设计取舍。
+26 章，中英双语，按项目真实演化路径重建——依据 git 历史、当前工作区，以及已经沉淀进代码的设计取舍。
 
 - **[中文教程](tutorial/zh/README.md)** —— 章节地图与阅读顺序
 - **[English tutorial](tutorial/en/README.md)**

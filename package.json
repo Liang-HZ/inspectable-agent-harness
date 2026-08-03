@@ -11,7 +11,10 @@
     "typecheck": "tsc --noEmit",
     "docs:dev": "vitepress dev tutorial",
     "docs:build": "vitepress build tutorial",
-    "docs:preview": "vitepress preview tutorial"
+    "docs:preview": "vitepress preview tutorial",
+    "obs:up": "test -f docs/observability/.env || cp docs/observability/.env.example docs/observability/.env; (docker run -d --name phoenix-obs -p 6006:6006 arizephoenix/phoenix:latest || docker start phoenix-obs); docker compose -f docs/observability/docker-compose.langfuse.yml -p langfuse --env-file docs/observability/.env up -d",
+    "obs:down": "docker compose -f docs/observability/docker-compose.langfuse.yml -p langfuse down; docker stop phoenix-obs",
+    "obs:status": "docker ps --filter name=phoenix-obs --filter name=langfuse --format '{{.Names}}\\t{{.Status}}'"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

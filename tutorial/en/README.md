@@ -38,6 +38,7 @@ Chinese mirror: [../zh/README.md](../zh/README.md)
 | [22](22-frontend-dark-mode-and-polish.md) | Frontend dark mode and polish | Add system-level dark mode and verify the Agent/Chat workbench page by page. |
 | [23](23-production-harness-gap-map.md) | The gap map to production harnesses | Draw the book's boundary proactively: against Codex/Claude Code, list the missing mechanisms, why they were skipped, and when they become worth building. |
 | [24](24-os-level-sandbox.md) | OS-level sandbox | Graduate the chapter 18 lexical classifier to kernel enforcement: macOS `sandbox-exec` + Linux `bwrap`, fail-closed, carveouts protect `.git` / `.env` / sessions. |
+| [25](25-tracing-and-subagents/README.md) | Tracing and subagents | Turn the event stream into a span tree, derive subagents through a `task` tool with their own context and session file, and export to any OTLP backend without taking a vendor dependency. |
 
 Beyond the chapter table there is an
 [appendix of prerequisite bridges](appendix-prerequisites.md) for readers
