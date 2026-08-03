@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readdir, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, test } from 'node:test';
+import { after, afterEach, before, beforeEach, test } from 'node:test';
 
 import { runAgentStream } from '../lib/agent';
 import type { AgentEvent } from '../lib/agent-events';
@@ -41,22 +42,24 @@ afterEach(() => {
   console.error = originalError;
 });
 
-async function removeSessionFilesForRun(runId: string): Promise<void> {
-  const sessionsRoot = path.join(process.cwd(), 'data', 'agent-sessions');
+// `runAgentStream` opens a real session file, so this file writes under a temp
+// AGENT_SESSION_ROOT and drops the whole directory afterwards. It used to scan
+// the real `data/agent-sessions` with a recursive readdir and delete its own
+// run's files back out of it -- reading and writing the very directory a live
+// dev-server run is appending to. See `agent-session-store.test.ts`.
+let sessionRoot = '';
 
-  let entries;
-  try {
-    entries = await readdir(sessionsRoot, { recursive: true });
-  } catch {
-    return;
-  }
+before(async () => {
+  sessionRoot = await mkdtemp(
+    path.join(os.tmpdir(), 'agent-terminal-events-test-'),
+  );
+  process.env.AGENT_SESSION_ROOT = sessionRoot;
+});
 
-  for (const entry of entries) {
-    if (entry.includes(runId) && entry.endsWith('.jsonl')) {
-      await rm(path.join(sessionsRoot, entry), { force: true });
-    }
-  }
-}
+after(async () => {
+  delete process.env.AGENT_SESSION_ROOT;
+  await rm(sessionRoot, { recursive: true, force: true });
+});
 
 test('an aborted run emits run_cancelled as its terminal event', async () => {
   const runId = `run-cancelled-${randomUUID()}`;
@@ -64,61 +67,53 @@ test('an aborted run emits run_cancelled as its terminal event', async () => {
   abortController.abort();
   const events: AgentEvent[] = [];
 
-  try {
-    await assert.rejects(
-      runAgentStream(
-        baseInput,
-        unreachableConfig,
-        {
-          runId: runId,
-          signal: abortController.signal,
-          approvalMode: 'interactive',
-        },
-        {
-          onEvent: (event) => events.push(event),
-          onDebugEvent: () => {},
-        },
-      ),
-    );
+  await assert.rejects(
+    runAgentStream(
+      baseInput,
+      unreachableConfig,
+      {
+        runId: runId,
+        signal: abortController.signal,
+        approvalMode: 'interactive',
+      },
+      {
+        onEvent: (event) => events.push(event),
+        onDebugEvent: () => {},
+      },
+    ),
+  );
 
-    const eventTypes = events.map((event) => event.type);
-    assert.ok(eventTypes.includes('run_started'));
-    assert.equal(eventTypes[eventTypes.length - 1], 'run_cancelled');
-  } finally {
-    await removeSessionFilesForRun(runId);
-  }
+  const eventTypes = events.map((event) => event.type);
+  assert.ok(eventTypes.includes('run_started'));
+  assert.equal(eventTypes[eventTypes.length - 1], 'run_cancelled');
 });
 
 test('a failed run emits run_failed as its terminal event', async () => {
   const runId = `run-failed-${randomUUID()}`;
   const events: AgentEvent[] = [];
 
-  try {
-    await assert.rejects(
-      runAgentStream(
-        baseInput,
-        unreachableConfig,
-        {
-          runId: runId,
-          approvalMode: 'interactive',
-        },
-        {
-          onEvent: (event) => events.push(event),
-          onDebugEvent: () => {},
-        },
-      ),
-    );
+  await assert.rejects(
+    runAgentStream(
+      baseInput,
+      unreachableConfig,
+      {
+        runId: runId,
+        approvalMode: 'interactive',
+      },
+      {
+        onEvent: (event) => events.push(event),
+        onDebugEvent: () => {},
+      },
+    ),
+  );
 
-    const eventTypes = events.map((event) => event.type);
-    assert.ok(eventTypes.includes('run_started'));
-    assert.equal(eventTypes[eventTypes.length - 1], 'run_failed');
+  const eventTypes = events.map((event) => event.type);
+  assert.ok(eventTypes.includes('run_started'));
+  assert.equal(eventTypes[eventTypes.length - 1], 'run_failed');
 
-    const terminalEvent = events[events.length - 1];
-    assert.equal(terminalEvent?.type, 'run_failed');
-    if (terminalEvent?.type === 'run_failed') {
-      assert.notEqual(terminalEvent.error, '');
-    }
-  } finally {
-    await removeSessionFilesForRun(runId);
+  const terminalEvent = events[events.length - 1];
+  assert.equal(terminalEvent?.type, 'run_failed');
+  if (terminalEvent?.type === 'run_failed') {
+    assert.notEqual(terminalEvent.error, '');
   }
 });

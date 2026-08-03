@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
-import { afterEach, test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, afterEach, before, test } from 'node:test';
 
 import { initializeAgentSessionForStream } from '../lib/agent';
 import type { AgentInput } from '../lib/agent-input';
@@ -17,17 +19,23 @@ import type { ModelConfig } from '../lib/env';
 
 const originalInfo = console.info;
 
-const createdSessionPaths: string[] = [];
+// Resuming scans the whole session root, so this file writes and reads under a
+// temp AGENT_SESSION_ROOT instead of the real `data/agent-sessions`. See the
+// same setup in `agent-session-store.test.ts` for why.
+let sessionRoot = '';
 
-afterEach(async () => {
+before(async () => {
+  sessionRoot = await mkdtemp(join(tmpdir(), 'agent-session-resume-test-'));
+  process.env.AGENT_SESSION_ROOT = sessionRoot;
+});
+
+after(async () => {
+  delete process.env.AGENT_SESSION_ROOT;
+  await rm(sessionRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
   console.info = originalInfo;
-
-  while (createdSessionPaths.length > 0) {
-    const path = createdSessionPaths.pop();
-    if (path !== undefined) {
-      await rm(path, { force: true });
-    }
-  }
 });
 
 const config: ModelConfig = {
@@ -53,7 +61,8 @@ function baseInput(overrides: Partial<AgentInput> = {}): AgentInput {
 
 function createTestSession(): AgentSession {
   console.info = () => {};
-  const session = createAgentSession({
+
+  return createAgentSession({
     id: `test-session-init-${randomUUID()}`,
     cwd: process.cwd(),
     source: 'api_agent_stream',
@@ -66,9 +75,6 @@ function createTestSession(): AgentSession {
       sandboxMode: 'workspace_write',
     },
   });
-  createdSessionPaths.push(session.path);
-
-  return session;
 }
 
 test('creates a fresh session when no sessionId is given', () => {
@@ -80,7 +86,6 @@ test('creates a fresh session when no sessionId is given', () => {
     config,
     'built prompt text',
   );
-  createdSessionPaths.push(result.session.path);
 
   assert.equal(result.resumed, false);
   assert.equal(result.sessionId, context.runId);
